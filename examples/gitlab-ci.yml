@@ -1,0 +1,79 @@
+# Example job for a consumer project's .gitlab-ci.yml.
+#
+# Reports Composer dependency changes (additions, removals, version/reference
+# updates) as a note on the merge request. See the dependency-diff-notes
+# README for the full configuration surface.
+
+dependency-diff-notes:
+  stage: test
+  image: ghcr.io/jdecool/dependency-diff-notes:latest
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    # A shallow default clone won't have the target branch's history, and
+    # the bot needs `origin/<target-branch>` to resolve locally to compute
+    # the merge base. GIT_DEPTH: 0 fetches full history; alternatively,
+    # replace this with an explicit
+    # `git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME` in before_script.
+    GIT_DEPTH: 0
+  script:
+    - dependency-diff-notes
+  # A real bot error must fail this job clearly in the logs, but must never
+  # block the merge — that's why allow_failure is set here, not left to the
+  # bot to decide.
+  allow_failure: true
+  # DEPENDENCY_DIFF_NOTES_TOKEN (a GitLab API token with permission to read/write
+  # merge request notes) must be set as a masked/protected CI/CD variable
+  # in this project's Settings > CI/CD > Variables. Do not commit it here.
+
+# Fallback if your GitLab instance can't pull from ghcr.io (e.g. air-gapped):
+# builds the bot from source with `go install` instead of using the
+# prebuilt image.
+#
+# dependency-diff-notes:
+#   stage: test
+#   image: golang:1
+#   rules:
+#     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+#   variables:
+#     GIT_DEPTH: 0
+#   before_script:
+#     - go install github.com/jdecool/dependency-diff-notes/cmd/dependency-diff-notes@latest
+#   script:
+#     - dependency-diff-notes
+#   allow_failure: true
+
+# Variant with the binary vendored directly in this project's source tree:
+# no image pull from ghcr.io and no Go toolchain needed at CI time — just a
+# static binary you commit to the repo and execute.
+#
+# One-time setup, done from a machine with Go installed:
+#   1. Build a Linux binary matching the CI runner's architecture (amd64 here).
+#      The bot is a pure-Go, statically linked binary, so it runs as-is on
+#      slim/alpine images without libc surprises:
+#        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+#          go build -o .gitlab/bin/dependency-diff-notes \
+#          github.com/jdecool/dependency-diff-notes/cmd/dependency-diff-notes@latest
+#   2. Commit it and keep the executable bit so CI can run it directly:
+#        git add .gitlab/bin/dependency-diff-notes
+#        git update-index --chmod=+x .gitlab/bin/dependency-diff-notes
+#   3. Re-run those two steps to upgrade the bot (pin @<version> instead of
+#      @latest for reproducible builds).
+#
+# Trade-off: the binary is versioned in the repo (a few MB, opaque to diffs)
+# and must match the runner's OS/arch. In exchange the job has zero network
+# and zero build dependency — the fastest, most air-gap-friendly option.
+#
+# dependency-diff-notes:
+#   stage: test
+#   image: debian:stable-slim
+#   rules:
+#     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+#   variables:
+#     GIT_DEPTH: 0
+#   before_script:
+#     # git is needed to resolve the merge base; slim images don't ship it.
+#     - apt-get update && apt-get install -y --no-install-recommends git
+#   script:
+#     - ./.gitlab/bin/dependency-diff-notes
+#   allow_failure: true

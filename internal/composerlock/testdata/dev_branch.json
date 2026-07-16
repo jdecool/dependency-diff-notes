@@ -1,0 +1,13 @@
+{
+    "packages": [
+        {
+            "name": "acme/dev-dependency",
+            "version": "dev-main",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/acme/dev-dependency.git",
+                "reference": "fedcba0987654321"
+            }
+        }
+    ]
+}

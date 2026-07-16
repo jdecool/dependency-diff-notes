@@ -1,0 +1,19 @@
+{
+    "packages": [
+        {
+            "name": "acme/metapackage",
+            "version": "1.0.0",
+            "type": "metapackage"
+        },
+        {
+            "name": "acme/path-package",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../path-package",
+                "reference": "abc123"
+            }
+        }
+    ],
+    "packages-dev": []
+}

@@ -1,0 +1,50 @@
+version: 2
+
+project_name: dependency-diff-notes
+
+builds:
+  - main: ./cmd/dependency-diff-notes
+    binary: dependency-diff-notes
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+dockers_v2:
+  - images:
+      - ghcr.io/jdecool/dependency-diff-notes
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: jdecool
+    name: dependency-diff-notes
+  draft: false
+  prerelease: auto

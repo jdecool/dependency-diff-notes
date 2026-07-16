@@ -1,0 +1,54 @@
+# Example workflow for a consumer project's .github/workflows/.
+#
+# Reports Composer dependency changes (additions, removals, version/reference
+# updates) as a comment on the pull request. See the dependency-diff-notes
+# README for the full configuration surface.
+
+name: dependency-diff-notes
+
+on:
+  pull_request:
+
+permissions:
+  pull-requests: write
+
+jobs:
+  dependency-diff-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A shallow default clone won't have the target branch's history,
+          # and the bot needs `origin/<target-branch>` to resolve locally to
+          # compute the merge base. fetch-depth: 0 fetches full history;
+          # alternatively, replace this with an explicit
+          # `git fetch origin $GITHUB_BASE_REF` in a separate step.
+          fetch-depth: 0
+
+      - name: Run dependency-diff-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" -w /repo \
+            -e GITHUB_ACTIONS -e GITHUB_REPOSITORY -e GITHUB_REF -e GITHUB_BASE_REF -e GITHUB_TOKEN \
+            ghcr.io/jdecool/dependency-diff-notes:latest
+        # A real bot error must fail this step clearly in the logs, but must
+        # never block the merge — that's why continue-on-error is set here,
+        # not left to the bot to decide.
+        continue-on-error: true
+
+# Fallback if you'd rather not pull the image (e.g. self-hosted runner
+# without Docker, or an air-gapped environment): build the bot from source
+# with `go install` instead.
+#
+#      - uses: actions/setup-go@v5
+#        with:
+#          go-version: "1.26"
+#      - name: Install dependency-diff-notes
+#        run: go install github.com/jdecool/dependency-diff-notes/cmd/dependency-diff-notes@latest
+#      - name: Run dependency-diff-notes
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        run: dependency-diff-notes
+#        continue-on-error: true
