@@ -41,6 +41,7 @@ type Config struct {
 	Token                  string
 	ComposerLockPath       string // path to composer.lock (Composer Ecosystem, see CONTEXT.md)
 	NPMLockPath            string // path to package-lock.json (npm Ecosystem, see CONTEXT.md)
+	PnpmLockPath           string // path to pnpm-lock.yaml (pnpm Ecosystem, see CONTEXT.md)
 	RepoDir                string
 	InChangeRequestContext bool // true iff ChangeRequestIID resolved to a non-empty value
 }
@@ -48,6 +49,7 @@ type Config struct {
 const (
 	defaultComposerLockPath = "composer.lock"
 	defaultNPMLockPath      = "package-lock.json"
+	defaultPnpmLockPath     = "pnpm-lock.yaml"
 	defaultRepoDir          = "."
 )
 
@@ -91,6 +93,7 @@ func Load(args []string) (Config, error) {
 	token := fs.String("token", "", "Forge API token (default: $DEPENDENCY_DIFF_NOTES_TOKEN or $GITHUB_TOKEN)")
 	composerLockPath := fs.String("composer-lock-path", "", "Path to composer.lock (default: $DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH, or \"composer.lock\")")
 	npmLockPath := fs.String("npm-lock-path", "", "Path to package-lock.json (default: $DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH, or \"package-lock.json\")")
+	pnpmLockPath := fs.String("pnpm-lock-path", "", "Path to pnpm-lock.yaml (default: $DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH, or \"pnpm-lock.yaml\")")
 	repoDir := fs.String("repo-dir", "", "Path to the repository checkout (default: \".\")")
 
 	if err := fs.Parse(args); err != nil {
@@ -103,6 +106,7 @@ func Load(args []string) (Config, error) {
 		Forge:            forge,
 		ComposerLockPath: resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
 		NPMLockPath:      resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
+		PnpmLockPath:     resolve(*pnpmLockPath, "DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH", defaultPnpmLockPath),
 		RepoDir:          resolveNoEnv(*repoDir, defaultRepoDir),
 	}
 

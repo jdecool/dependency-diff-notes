@@ -1,0 +1,34 @@
+lockfileVersion: 5.4
+
+specifiers:
+  eslint: ^8.29.0
+  lodash: ^4.17.21
+  '@babel/core': ^7.20.0
+  ts-node: ^10.9.1
+
+dependencies:
+  lodash: 4.17.21
+  '@babel/core': 7.20.0
+
+devDependencies:
+  eslint: 8.29.0
+  ts-node: 10.9.1
+
+packages:
+
+  /lodash/4.17.21:
+    resolution: {integrity: sha512-v2kDEe57lecTulaDIuNTPy3Ry4/GHY/23nY/qm9V4wcVYcJ4C6+PkNJqCXHzXfCaHPRVSw9NUwj4Rf/5FLpb0g==}
+    dev: false
+
+  /@babel/core/7.20.0:
+    resolution: {integrity: sha512-Bm8ma0RwViGXqXTApFvgW9gcOd0FUAAoyzYRJXfQMHXQdJwKdKUNfIVFR9lLnMcyeE9AR5g7NCq7fJUyBPXqvA==}
+
+  /eslint/8.29.0:
+    resolution: {integrity: sha512-isRXgqSy4sZ0CxHESuq6NB+7NkP+CVFf/e3jr5EhOhAoOD2E9nIesNjjaFupt3wldbIkbe8B/K5UDb0nu6/xnQ==}
+    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+    hasBin: true
+    dev: true
+
+  /ts-node/10.9.1_bar@2.0.0:
+    resolution: {integrity: sha512-XXXexampleXXXsha512hash==}
+    dev: true

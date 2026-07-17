@@ -39,6 +39,12 @@ func Render(r dependencydiff.Report) string {
 
 		fmt.Fprintf(&b, "\n### %s\n", s.Ecosystem)
 
+		if len(s.Combined) > 0 {
+			b.WriteString("\n#### Dependencies\n")
+			writeChanges(&b, s.Combined)
+			continue
+		}
+
 		if len(s.Production) > 0 {
 			b.WriteString("\n#### Production dependencies\n")
 			writeChanges(&b, s.Production)

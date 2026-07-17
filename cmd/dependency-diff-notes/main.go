@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jdecool/dependency-diff-notes/internal/composerlock"
 	"github.com/jdecool/dependency-diff-notes/internal/config"
@@ -15,6 +16,7 @@ import (
 	"github.com/jdecool/dependency-diff-notes/internal/gitref"
 	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 	"github.com/jdecool/dependency-diff-notes/internal/npmlock"
+	"github.com/jdecool/dependency-diff-notes/internal/pnpmlock"
 	"github.com/jdecool/dependency-diff-notes/internal/report"
 )
 
@@ -76,6 +78,12 @@ type ecosystemSpec struct {
 	ecosystem lockfile.Ecosystem
 	lockPath  string
 	parse     func([]byte) (lockfile.Lock, error)
+	// jsFamily marks Ecosystems whose Lockfiles are mutually exclusive
+	// (see CONTEXT.md: Lockfile) — a project uses at most one JavaScript
+	// package manager at a time, so more than one of these Lockfiles
+	// present at the same ref is a conflict, not a legitimate
+	// multi-Ecosystem Change Request the way Composer + npm is.
+	jsFamily bool
 }
 
 // ecosystemSpecs returns the spec for every Ecosystem the bot knows how to
@@ -83,8 +91,9 @@ type ecosystemSpec struct {
 // path for each.
 func ecosystemSpecs(cfg config.Config) []ecosystemSpec {
 	return []ecosystemSpec{
-		{lockfile.Composer, cfg.ComposerLockPath, composerlock.Parse},
-		{lockfile.NPM, cfg.NPMLockPath, npmlock.Parse},
+		{lockfile.Composer, cfg.ComposerLockPath, composerlock.Parse, false},
+		{lockfile.NPM, cfg.NPMLockPath, npmlock.Parse, true},
+		{lockfile.Pnpm, cfg.PnpmLockPath, pnpmlock.Parse, true},
 	}
 }
 
@@ -100,9 +109,17 @@ func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
 			cfg.TargetBranch, err)
 	}
 
+	specs := ecosystemSpecs(cfg)
+
+	for _, ref := range []string{base, "HEAD"} {
+		if err := checkJSFamilyConflict(cfg.RepoDir, ref, specs); err != nil {
+			return dependencydiff.Report{}, err
+		}
+	}
+
 	var report dependencydiff.Report
 
-	for _, spec := range ecosystemSpecs(cfg) {
+	for _, spec := range specs {
 		baseLock, err := lockAtRef(cfg.RepoDir, base, spec.lockPath, spec.parse)
 		if err != nil {
 			return dependencydiff.Report{}, fmt.Errorf("read %s at merge base %q: %w", spec.lockPath, base, err)
@@ -117,6 +134,41 @@ func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
 	}
 
 	return report, nil
+}
+
+// checkJSFamilyConflict returns an error if more than one jsFamily
+// Ecosystem's Lockfile exists at ref (see CONTEXT.md: Lockfile) — e.g. both
+// package-lock.json and pnpm-lock.yaml present at once. The bot refuses to
+// guess which package manager is actually in use rather than silently
+// reporting both or picking one. This check runs per ref (independently at
+// the merge-base and at HEAD), not across the two: a Change Request that
+// migrates from one JavaScript package manager to another is not a
+// conflict, since the two Lockfiles never coexist at the same ref.
+func checkJSFamilyConflict(repoDir, ref string, specs []ecosystemSpec) error {
+	var present []string
+
+	for _, spec := range specs {
+		if !spec.jsFamily {
+			continue
+		}
+
+		if _, err := gitref.FileAtRef(repoDir, ref, spec.lockPath); err != nil {
+			if errors.Is(err, gitref.ErrFileNotFound) {
+				continue
+			}
+			return fmt.Errorf("check %s at %s: %w", spec.lockPath, ref, err)
+		}
+
+		present = append(present, fmt.Sprintf("%s (%s)", spec.lockPath, spec.ecosystem))
+	}
+
+	if len(present) > 1 {
+		return fmt.Errorf(
+			"conflicting JavaScript Lockfiles at %s: %s — a project uses at most one JavaScript package manager at a time",
+			ref, strings.Join(present, ", "))
+	}
+
+	return nil
 }
 
 // lockAtRef reads and parses a Lockfile at ref using parse, within the git

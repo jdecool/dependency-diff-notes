@@ -11,6 +11,7 @@ type Ecosystem int
 const (
 	Composer Ecosystem = iota
 	NPM
+	Pnpm
 )
 
 // String returns the human-readable Ecosystem name, used as the section
@@ -19,6 +20,8 @@ func (e Ecosystem) String() string {
 	switch e {
 	case NPM:
 		return "npm"
+	case Pnpm:
+		return "pnpm"
 	default:
 		return "Composer"
 	}
@@ -34,6 +37,13 @@ type Package struct {
 
 // Lock is the parsed content of one Ecosystem's Lockfile.
 type Lock struct {
-	Packages    []Package // production dependencies
-	PackagesDev []Package // development dependencies
+	// Combined is true when the Lockfile doesn't distinguish production
+	// from development dependencies at all (see CONTEXT.md: Production
+	// dependencies / Development dependencies) — e.g. pnpm lockfileVersion
+	// 9.0, which dropped the per-package "dev" flag lockfileVersion 5.x and
+	// 6.0 had. When true, Packages holds every dependency and PackagesDev
+	// is unused.
+	Combined    bool
+	Packages    []Package // production dependencies, or every dependency when Combined is true
+	PackagesDev []Package // development dependencies; always empty when Combined is true
 }

@@ -368,6 +368,105 @@ func TestRunReportsBothEcosystemsInOneComment(t *testing.T) {
 	}
 }
 
+func TestRunReportsPnpmCombinedSection(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// Pin the Forge to GitLab: on a GitHub Actions runner GITHUB_ACTIONS=true
+	// would otherwise make config.Detect() pick GitHub and ignore the fake
+	// GitLab server below.
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	baseFiles := map[string]string{
+		"pnpm-lock.yaml": "lockfileVersion: '9.0'\n" +
+			"importers:\n" +
+			"  .:\n" +
+			"    dependencies:\n" +
+			"      lodash:\n" +
+			"        specifier: ^4.17.20\n" +
+			"        version: 4.17.20\n" +
+			"packages:\n" +
+			"  lodash@4.17.20:\n" +
+			"    resolution: {integrity: sha512-example==}\n",
+	}
+	headFiles := map[string]string{
+		"pnpm-lock.yaml": "lockfileVersion: '9.0'\n" +
+			"importers:\n" +
+			"  .:\n" +
+			"    dependencies:\n" +
+			"      lodash:\n" +
+			"        specifier: ^4.17.21\n" +
+			"        version: 4.17.21\n" +
+			"packages:\n" +
+			"  lodash@4.17.21:\n" +
+			"    resolution: {integrity: sha512-example==}\n",
+	}
+
+	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+
+	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if !server.createCalled {
+		t.Fatal("expected CreateNote to be called")
+	}
+	if !strings.Contains(server.createBody, "### pnpm") {
+		t.Errorf("create note body = %q, want it to contain a pnpm section", server.createBody)
+	}
+	if !strings.Contains(server.createBody, "#### Dependencies") {
+		t.Errorf("create note body = %q, want a single undifferentiated Dependencies group (lockfileVersion 9.0 has no dev/prod split)", server.createBody)
+	}
+	if strings.Contains(server.createBody, "Production dependencies") || strings.Contains(server.createBody, "Development dependencies") {
+		t.Errorf("create note body = %q, want no Production/Development split for pnpm lockfileVersion 9.0", server.createBody)
+	}
+	if !strings.Contains(server.createBody, "lodash") {
+		t.Errorf("create note body = %q, want it to mention the pnpm change lodash", server.createBody)
+	}
+}
+
+func TestRunFailsOnConflictingJSLockfiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// Pin the Forge to GitLab: on a GitHub Actions runner GITHUB_ACTIONS=true
+	// would otherwise make config.Detect() pick GitHub and ignore the fake
+	// GitLab server below.
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// Both package-lock.json and pnpm-lock.yaml present at the same ref
+	// (HEAD): a genuine conflict (see CONTEXT.md: Lockfile), not the
+	// legitimate multi-Ecosystem case Composer + npm is. Neither exists yet
+	// at the base commit, so the two commits actually differ (an identical
+	// base/head commit would be an empty, rejected commit).
+	pkgLock := `{"packages":{"":{"name":"my-app"},"node_modules/lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"}}}`
+	pnpmLock := "lockfileVersion: '9.0'\npackages:\n  lodash@4.17.21:\n    resolution: {integrity: sha512-example==}\n"
+
+	baseFiles := map[string]string{"README.md": "base"}
+	headFiles := map[string]string{
+		"README.md":         "base",
+		"package-lock.json": pkgLock,
+		"pnpm-lock.yaml":    pnpmLock,
+	}
+
+	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+
+	err := run(runArgs(repoDir, server.URL, "123", "45"))
+	if err == nil {
+		t.Fatal("run() error = nil, want a conflict error")
+	}
+	if !strings.Contains(err.Error(), "package-lock.json") || !strings.Contains(err.Error(), "pnpm-lock.yaml") {
+		t.Errorf("run() error = %q, want it to mention both conflicting Lockfiles", err.Error())
+	}
+	if server.createCalled || server.updateCalled {
+		t.Error("expected no Bot Comment to be created or updated when the run fails on a conflict")
+	}
+}
+
 func TestRunNoOpOutsideChangeRequestContext(t *testing.T) {
 	// Make sure no ambient CI environment leaks a change request context
 	// into this test.

@@ -217,6 +217,44 @@ func TestDiff(t *testing.T) {
 			},
 		},
 		{
+			name: "combined mode when head is Combined: no Production/Development split",
+			base: lockfile.Lock{},
+			head: lockfile.Lock{
+				Combined: true,
+				Packages: []lockfile.Package{
+					{Name: "lodash", Version: "4.17.21"},
+				},
+			},
+			want: Section{
+				Ecosystem: lockfile.Pnpm,
+				Combined: []Change{
+					{Name: "lodash", Type: Added, ToVersion: "4.17.21"},
+				},
+			},
+		},
+		{
+			name: "combined mode normalizes a split base instead of double-reporting: a lockfileVersion upgrade mid-Change-Request",
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
+					{Name: "lodash", Version: "4.17.21"},
+				},
+				PackagesDev: []lockfile.Package{
+					{Name: "eslint", Version: "8.29.0"},
+				},
+			},
+			head: lockfile.Lock{
+				Combined: true,
+				Packages: []lockfile.Package{
+					{Name: "lodash", Version: "4.17.21"},
+					{Name: "eslint", Version: "8.29.0"},
+				},
+			},
+			// Both packages are unchanged across the upgrade (same name and
+			// version on both sides), so despite base being split and head
+			// being Combined, nothing should show up as removed or added.
+			want: Section{Ecosystem: lockfile.Pnpm},
+		},
+		{
 			name: "the ecosystem passed to Diff is echoed onto the Section, regardless of its packages",
 			base: lockfile.Lock{},
 			head: lockfile.Lock{
@@ -260,6 +298,15 @@ func TestSectionIsEmpty(t *testing.T) {
 			section: Section{
 				Production: []Change{
 					{Name: "acme/foo", Type: Added, ToVersion: "1.0.0"},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "non-empty Combined section",
+			section: Section{
+				Combined: []Change{
+					{Name: "lodash", Type: Added, ToVersion: "4.17.21"},
 				},
 			},
 			want: false,
@@ -326,7 +373,8 @@ func TestReportIsEmpty(t *testing.T) {
 func sectionsEqual(a, b Section) bool {
 	return a.Ecosystem == b.Ecosystem &&
 		changesEqual(a.Production, b.Production) &&
-		changesEqual(a.Development, b.Development)
+		changesEqual(a.Development, b.Development) &&
+		changesEqual(a.Combined, b.Combined)
 }
 
 func changesEqual(a, b []Change) bool {
