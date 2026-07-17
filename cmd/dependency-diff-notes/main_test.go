@@ -143,6 +143,37 @@ const (
 	testHeadLock = `{"packages":[{"name":"vendor/pkg1","version":"1.0.0"},{"name":"vendor/pkg2","version":"2.0.0"}],"packages-dev":[]}`
 )
 
+// setupMultiFileOrchestrationRepo behaves like setupOrchestrationRepo, but
+// commits an arbitrary set of files (path -> content) at each stage, so
+// more than one Ecosystem's Lockfile can be present in the same repo.
+func setupMultiFileOrchestrationRepo(t *testing.T, baseFiles, headFiles map[string]string) string {
+	t.Helper()
+
+	remoteDir := t.TempDir()
+	runGit(t, remoteDir, "init", "--bare", "-b", "main")
+
+	workDir := t.TempDir()
+	runGit(t, workDir, "init", "-b", "main")
+	runGit(t, workDir, "remote", "add", "origin", remoteDir)
+
+	for name, content := range baseFiles {
+		writeFile(t, workDir, name, content)
+		runGit(t, workDir, "add", name)
+	}
+	runGit(t, workDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "Base commit")
+
+	runGit(t, workDir, "push", "origin", "main")
+	runGit(t, workDir, "fetch", "origin")
+
+	for name, content := range headFiles {
+		writeFile(t, workDir, name, content)
+		runGit(t, workDir, "add", name)
+	}
+	runGit(t, workDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "Update lockfiles")
+
+	return workDir
+}
+
 // commentJSON is the wire shape shared by both fake Forge servers below
 // (GitLab notes and GitHub issue comments both expose "id" and "body").
 type commentJSON struct {
@@ -272,7 +303,7 @@ func TestRunUpdatesExistingComment(t *testing.T) {
 
 	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
 	existing := []commentJSON{
-		{ID: 7, Body: report.Marker + "\n## Composer dependency changes\n\nNo dependency changes detected.\n"},
+		{ID: 7, Body: report.Marker + "\n## Dependency changes\n\nNo dependency changes detected.\n"},
 	}
 	server := newFakeGitLabServer(t, "123", "45", existing)
 
@@ -294,6 +325,46 @@ func TestRunUpdatesExistingComment(t *testing.T) {
 	}
 	if !strings.Contains(server.updateBody, "vendor/pkg2") || !strings.Contains(server.updateBody, "2.0.0") {
 		t.Errorf("update note body = %q, want it to mention vendor/pkg2 2.0.0", server.updateBody)
+	}
+}
+
+func TestRunReportsBothEcosystemsInOneComment(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// Pin the Forge to GitLab: on a GitHub Actions runner GITHUB_ACTIONS=true
+	// would otherwise make config.Detect() pick GitHub and ignore the fake
+	// GitLab server below.
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	baseFiles := map[string]string{
+		"composer.lock":     testBaseLock,
+		"package-lock.json": `{"packages":{"":{"name":"my-app"},"node_modules/lodash":{"version":"4.17.20","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"}}}`,
+	}
+	headFiles := map[string]string{
+		"composer.lock":     testHeadLock,
+		"package-lock.json": `{"packages":{"":{"name":"my-app"},"node_modules/lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"}}}`,
+	}
+
+	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+
+	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if !server.createCalled {
+		t.Fatal("expected CreateNote to be called")
+	}
+	if !strings.Contains(server.createBody, "### Composer") || !strings.Contains(server.createBody, "### npm") {
+		t.Errorf("create note body = %q, want it to contain both a Composer and an npm section", server.createBody)
+	}
+	if !strings.Contains(server.createBody, "vendor/pkg2") {
+		t.Errorf("create note body = %q, want it to mention the Composer change vendor/pkg2", server.createBody)
+	}
+	if !strings.Contains(server.createBody, "lodash") {
+		t.Errorf("create note body = %q, want it to mention the npm change lodash", server.createBody)
 	}
 }
 

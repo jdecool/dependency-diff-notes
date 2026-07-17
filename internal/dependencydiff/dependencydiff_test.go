@@ -3,25 +3,26 @@ package dependencydiff
 import (
 	"testing"
 
-	"github.com/jdecool/dependency-diff-notes/internal/composerlock"
+	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 )
 
 func TestDiff(t *testing.T) {
 	tests := []struct {
 		name string
-		base composerlock.Lock
-		head composerlock.Lock
-		want Report
+		base lockfile.Lock
+		head lockfile.Lock
+		want Section
 	}{
 		{
 			name: "pure addition",
-			base: composerlock.Lock{},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{},
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", Reference: "abc123", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			want: Report{
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{
 						Name:        "acme/foo",
@@ -35,13 +36,14 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "pure removal",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", Reference: "abc123", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			head: composerlock.Lock{},
-			want: Report{
+			head: lockfile.Lock{},
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{
 						Name:          "acme/foo",
@@ -55,17 +57,18 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "version-only update",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", Reference: "abc123", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.1.0", Reference: "def456", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			want: Report{
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{
 						Name:          "acme/foo",
@@ -81,17 +84,18 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "reference-only update with identical version (dev-main case)",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "dev-main", Reference: "abc123", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "dev-main", Reference: "def456", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			want: Report{
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{
 						Name:          "acme/foo",
@@ -107,37 +111,38 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "package unchanged is excluded",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", Reference: "abc123", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", Reference: "abc123", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			want: Report{},
+			want: Section{Ecosystem: lockfile.Composer},
 		},
 		{
 			name: "ordering: added, updated, removed each alphabetical, out-of-order input",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "zzz/removed-one", Version: "1.0.0"},
 					{Name: "bbb/updated-two", Version: "1.0.0"},
 					{Name: "aaa/removed-two", Version: "1.0.0"},
 					{Name: "yyy/updated-one", Version: "1.0.0"},
 				},
 			},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "yyy/updated-one", Version: "2.0.0"},
 					{Name: "mmm/added-two", Version: "1.0.0"},
 					{Name: "bbb/updated-two", Version: "2.0.0"},
 					{Name: "ccc/added-one", Version: "1.0.0"},
 				},
 			},
-			want: Report{
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{Name: "ccc/added-one", Type: Added, ToVersion: "1.0.0"},
 					{Name: "mmm/added-two", Type: Added, ToVersion: "1.0.0"},
@@ -150,13 +155,14 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "removed change keeps base's SourceURL",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			head: composerlock.Lock{},
-			want: Report{
+			head: lockfile.Lock{},
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{Name: "acme/foo", Type: Removed, FromVersion: "1.0.0", SourceURL: "https://example.com/acme/foo"},
 				},
@@ -164,17 +170,18 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "updated change falls back to base's SourceURL when head's is empty",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.1.0", SourceURL: ""},
 				},
 			},
-			want: Report{
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{Name: "acme/foo", Type: Updated, FromVersion: "1.0.0", ToVersion: "1.1.0", SourceURL: "https://example.com/acme/foo"},
 				},
@@ -182,24 +189,25 @@ func TestDiff(t *testing.T) {
 		},
 		{
 			name: "production and development sections are computed independently",
-			base: composerlock.Lock{
-				Packages: []composerlock.Package{
+			base: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "1.0.0"},
 				},
-				PackagesDev: []composerlock.Package{
+				PackagesDev: []lockfile.Package{
 					{Name: "acme/dev-tool", Version: "1.0.0"},
 				},
 			},
-			head: composerlock.Lock{
-				Packages: []composerlock.Package{
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{Name: "acme/foo", Version: "2.0.0"},
 				},
-				PackagesDev: []composerlock.Package{
+				PackagesDev: []lockfile.Package{
 					{Name: "acme/dev-tool", Version: "1.0.0"},
 					{Name: "acme/new-dev-tool", Version: "1.0.0"},
 				},
 			},
-			want: Report{
+			want: Section{
+				Ecosystem: lockfile.Composer,
 				Production: []Change{
 					{Name: "acme/foo", Type: Updated, FromVersion: "1.0.0", ToVersion: "2.0.0"},
 				},
@@ -208,14 +216,60 @@ func TestDiff(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "the ecosystem passed to Diff is echoed onto the Section, regardless of its packages",
+			base: lockfile.Lock{},
+			head: lockfile.Lock{
+				Packages: []lockfile.Package{
+					{Name: "lodash", Version: "4.17.21"},
+				},
+			},
+			want: Section{
+				Ecosystem: lockfile.NPM,
+				Production: []Change{
+					{Name: "lodash", Type: Added, ToVersion: "4.17.21"},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Diff(tt.base, tt.head)
+			got := Diff(tt.want.Ecosystem, tt.base, tt.head)
 
-			if !reportsEqual(got, tt.want) {
+			if !sectionsEqual(got, tt.want) {
 				t.Errorf("Diff() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSectionIsEmpty(t *testing.T) {
+	tests := []struct {
+		name    string
+		section Section
+		want    bool
+	}{
+		{
+			name:    "empty section",
+			section: Section{},
+			want:    true,
+		},
+		{
+			name: "non-empty section",
+			section: Section{
+				Production: []Change{
+					{Name: "acme/foo", Type: Added, ToVersion: "1.0.0"},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.section.IsEmpty(); got != tt.want {
+				t.Errorf("IsEmpty() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -228,15 +282,31 @@ func TestReportIsEmpty(t *testing.T) {
 		want   bool
 	}{
 		{
-			name:   "empty report",
+			name:   "no sections at all",
 			report: Report{},
 			want:   true,
 		},
 		{
-			name: "non-empty report",
+			name: "every section empty",
 			report: Report{
-				Production: []Change{
-					{Name: "acme/foo", Type: Added, ToVersion: "1.0.0"},
+				Sections: []Section{
+					{Ecosystem: lockfile.Composer},
+					{Ecosystem: lockfile.NPM},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "one non-empty section among empty ones",
+			report: Report{
+				Sections: []Section{
+					{Ecosystem: lockfile.Composer},
+					{
+						Ecosystem: lockfile.NPM,
+						Production: []Change{
+							{Name: "lodash", Type: Added, ToVersion: "4.17.21"},
+						},
+					},
 				},
 			},
 			want: false,
@@ -252,9 +322,11 @@ func TestReportIsEmpty(t *testing.T) {
 	}
 }
 
-// reportsEqual compares two Reports, treating nil and empty slices as equal.
-func reportsEqual(a, b Report) bool {
-	return changesEqual(a.Production, b.Production) && changesEqual(a.Development, b.Development)
+// sectionsEqual compares two Sections, treating nil and empty slices as equal.
+func sectionsEqual(a, b Section) bool {
+	return a.Ecosystem == b.Ecosystem &&
+		changesEqual(a.Production, b.Production) &&
+		changesEqual(a.Development, b.Development)
 }
 
 func changesEqual(a, b []Change) bool {

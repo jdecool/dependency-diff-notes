@@ -1,8 +1,9 @@
 # Example job for a consumer project's .gitlab-ci.yml.
 #
-# Reports Composer dependency changes (additions, removals, version/reference
-# updates) as a note on the merge request. See the dependency-diff-notes
-# README for the full configuration surface.
+# Reports dependency changes (additions, removals, version/reference updates)
+# for each active Ecosystem (Composer, npm, ...) as a note on the merge
+# request. See the dependency-diff-notes README for the full configuration
+# surface.
 
 dependency-diff-notes:
   stage: test
