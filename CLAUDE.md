@@ -25,7 +25,7 @@ make coverage        # HTML + JUnit reports in coverage/
 
 ## Architecture
 
-A bot that comments on a merge request with updated dependencies: it inspects a project's dependency state (Composer/PHP from `composer.lock`, npm/JavaScript from `package-lock.json`, pnpm/JavaScript from `pnpm-lock.yaml`), determines what changed per Ecosystem, and posts a single comment on the corresponding merge request reporting them.
+A bot that comments on a merge request with updated dependencies: it inspects a project's dependency state (Composer/PHP from `composer.lock`, npm/JavaScript from `package-lock.json`, pnpm/JavaScript from `pnpm-lock.yaml`, Yarn/JavaScript from `yarn.lock`), determines what changed per Ecosystem, and posts a single comment on the corresponding merge request reporting them.
 
 **Layout** (see `.claude/rules/project-layout.md` for details, based on [`golang-standards/project-layout`](https://github.com/golang-standards/project-layout)):
 

@@ -18,6 +18,7 @@ import (
 	"github.com/jdecool/dependency-diff-notes/internal/npmlock"
 	"github.com/jdecool/dependency-diff-notes/internal/pnpmlock"
 	"github.com/jdecool/dependency-diff-notes/internal/report"
+	"github.com/jdecool/dependency-diff-notes/internal/yarnlock"
 )
 
 // banner is the ASCII-art title printed on startup. The art embeds a
@@ -97,6 +98,7 @@ func ecosystemSpecs(cfg config.Config) []ecosystemSpec {
 		{lockfile.Composer, cfg.ComposerLockPath, composerlock.Parse, false},
 		{lockfile.NPM, cfg.NPMLockPath, npmlock.Parse, true},
 		{lockfile.Pnpm, cfg.PnpmLockPath, pnpmlock.Parse, true},
+		{lockfile.Yarn, cfg.YarnLockPath, yarnlock.Parse, true},
 	}
 
 	var specs []ecosystemSpec

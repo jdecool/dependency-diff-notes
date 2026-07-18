@@ -44,6 +44,7 @@ type Config struct {
 	ComposerLockPath       string // path to composer.lock (Composer Ecosystem, see CONTEXT.md)
 	NPMLockPath            string // path to package-lock.json (npm Ecosystem, see CONTEXT.md)
 	PnpmLockPath           string // path to pnpm-lock.yaml (pnpm Ecosystem, see CONTEXT.md)
+	YarnLockPath           string // path to yarn.lock (Yarn Ecosystem, see CONTEXT.md)
 	RepoDir                string
 	InChangeRequestContext bool // true iff ChangeRequestIID resolved to a non-empty value
 
@@ -66,6 +67,7 @@ const (
 	defaultComposerLockPath = "composer.lock"
 	defaultNPMLockPath      = "package-lock.json"
 	defaultPnpmLockPath     = "pnpm-lock.yaml"
+	defaultYarnLockPath     = "yarn.lock"
 	defaultRepoDir          = "."
 )
 
@@ -110,6 +112,7 @@ func Load(args []string) (Config, error) {
 	composerLockPath := fs.String("composer-lock-path", "", "Path to composer.lock (default: $DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH, or \"composer.lock\")")
 	npmLockPath := fs.String("npm-lock-path", "", "Path to package-lock.json (default: $DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH, or \"package-lock.json\")")
 	pnpmLockPath := fs.String("pnpm-lock-path", "", "Path to pnpm-lock.yaml (default: $DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH, or \"pnpm-lock.yaml\")")
+	yarnLockPath := fs.String("yarn-lock-path", "", "Path to yarn.lock (default: $DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH, or \"yarn.lock\")")
 	repoDir := fs.String("repo-dir", "", "Path to the repository checkout (default: \".\")")
 	ecosystems := fs.String("ecosystems", "", "Comma-separated Ecosystems to consider, e.g. \"composer,pnpm\" (default: $DEPENDENCY_DIFF_NOTES_ECOSYSTEMS, or all present)")
 
@@ -129,6 +132,7 @@ func Load(args []string) (Config, error) {
 		ComposerLockPath:     resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
 		NPMLockPath:          resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
 		PnpmLockPath:         resolve(*pnpmLockPath, "DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH", defaultPnpmLockPath),
+		YarnLockPath:         resolve(*yarnLockPath, "DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH", defaultYarnLockPath),
 		RepoDir:              resolveNoEnv(*repoDir, defaultRepoDir),
 		ConsideredEcosystems: considered,
 	}

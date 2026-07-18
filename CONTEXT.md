@@ -2,8 +2,7 @@
 
 A bot that reports dependency changes on a Change Request, so authors and reviewers can see every package addition, removal, or version change at a glance.
 
-**Supported ecosystems**: currently Composer (PHP), npm, and pnpm (both JavaScript).
-Yarn (also JavaScript) is designed for (see the Ecosystem and Lockfile entries below) but not yet implemented.
+**Supported ecosystems**: Composer (PHP), and npm, pnpm, and Yarn (all three JavaScript).
 
 ## Language
 
@@ -18,14 +17,14 @@ The bot computes Dependency Changes between the merge-base of the Change Request
 _Avoid_: merge request, pull request, MR, PR (each is the Forge-specific term; use them only when a sentence is specifically about that one Forge)
 
 **Ecosystem**:
-A (language, package manager) pairing the bot can read dependency state from, identified by the Lockfile format it produces: Composer (PHP); npm, Yarn, and pnpm (all three JavaScript — Yarn not yet implemented, see "Supported ecosystems" above).
+A (language, package manager) pairing the bot can read dependency state from, identified by the Lockfile format it produces: Composer (PHP); npm, Yarn, and pnpm (all three JavaScript).
 A Change Request may involve more than one Ecosystem at once (e.g. a Composer backend and an npm frontend in the same repository) — each active Ecosystem gets its own section of the same Dependency Report.
 _Avoid_: language, package manager (each names one half of the pairing; use them only when a sentence is specifically about that one half)
 
 **Lockfile**:
 The file recording a project's exact resolved dependency state for one Ecosystem: `composer.lock` (Composer), `package-lock.json` (npm), `yarn.lock` (Yarn), `pnpm-lock.yaml` (pnpm).
 An Ecosystem is active for a given ref when its Lockfile exists at that ref; detected independently at the merge-base and at the Change Request's current commit (see Dependency Change), not as a single combined check — a Change Request that migrates from one Ecosystem to another (e.g. Yarn → pnpm) is not a conflict, since the two Lockfiles never coexist at the same ref.
-Two Lockfiles of different JavaScript package managers coexisting at the *same* ref (e.g. both `yarn.lock` and `package-lock.json` present at HEAD) is a genuine conflict the bot refuses to guess about, and fails the run instead of picking one — reachable today between npm and pnpm, since both are implemented; Composer never participates in this conflict, since its Lockfile doesn't compete for the same role.
+Two Lockfiles of different JavaScript package managers coexisting at the *same* ref (e.g. both `yarn.lock` and `package-lock.json` present at HEAD) is a genuine conflict the bot refuses to guess about, and fails the run instead of picking one — reachable between any two of npm, Yarn, and pnpm, since all three are implemented; Composer never participates in this conflict, since its Lockfile doesn't compete for the same role.
 An operator can pre-empt this conflict by restricting the Considered Ecosystems (see below) to keep at most one JavaScript Ecosystem — the excluded one is then dropped for the whole run and never competes for the role.
 
 **Considered Ecosystems**:
@@ -42,7 +41,7 @@ _Avoid_: diff, delta
 **Reference Change**:
 A Dependency Change where a package's version label is unchanged (typical of Composer `dev-*` branch aliases, or a JavaScript git dependency pinned to a branch) but the resolved commit/identifier behind it differs (Composer's `source.reference`; a JavaScript git dependency's resolved commit).
 Treated as an update even though the version label itself didn't change.
-The concept applies uniformly across every Ecosystem, but is only actually implemented for Composer and npm so far — pnpm's git-dependency resolution format isn't handled yet, so a pnpm git dependency's Reference is always empty.
+The concept applies uniformly across every Ecosystem, but is only actually implemented for Composer, npm, and Yarn so far — pnpm's git-dependency resolution format isn't handled yet, so a pnpm git dependency's Reference is always empty.
 _Avoid_: commit change
 
 **Dependency Report**:
