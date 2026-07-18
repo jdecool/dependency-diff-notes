@@ -31,16 +31,20 @@ type Change struct {
 }
 
 // Section is one Ecosystem's slice of a Dependency Report (see CONTEXT.md):
-// its Production and Development Dependency Changes.
+// either its Production and Development Dependency Changes, or — when the
+// Lockfile doesn't distinguish the two (lockfile.Lock.Combined) — a single
+// undifferentiated Combined list instead. Exactly one of (Production,
+// Development) or Combined is ever populated for a given Section.
 type Section struct {
 	Ecosystem   lockfile.Ecosystem
-	Production  []Change
-	Development []Change
+	Production  []Change // empty when Combined is used instead
+	Development []Change // empty when Combined is used instead
+	Combined    []Change // empty when Production/Development are used instead
 }
 
 // IsEmpty reports whether the Section contains no changes at all.
 func (s Section) IsEmpty() bool {
-	return len(s.Production) == 0 && len(s.Development) == 0
+	return len(s.Production) == 0 && len(s.Development) == 0 && len(s.Combined) == 0
 }
 
 // Report is the full Dependency Report for a run: one Section per Ecosystem
@@ -63,12 +67,40 @@ func (r Report) IsEmpty() bool {
 // Diff computes one Ecosystem's Section: the Dependency Changes between base
 // (the merge-base / target branch snapshot) and head (the Change Request's
 // current snapshot) of a single Lock.
+//
+// If either side is Combined (e.g. a Change Request that upgrades pnpm
+// across the lockfileVersion 6.0 -> 9.0 boundary, where the dev/prod
+// distinction disappears — see lockfile.Lock), both sides are normalized to
+// their combined package list before diffing, so the result never
+// double-reports a package as both removed-from-Production and
+// added-to-Combined.
 func Diff(ecosystem lockfile.Ecosystem, base, head lockfile.Lock) Section {
+	if base.Combined || head.Combined {
+		return Section{
+			Ecosystem: ecosystem,
+			Combined:  diffPackages(allPackages(base), allPackages(head)),
+		}
+	}
+
 	return Section{
 		Ecosystem:   ecosystem,
 		Production:  diffPackages(base.Packages, head.Packages),
 		Development: diffPackages(base.PackagesDev, head.PackagesDev),
 	}
+}
+
+// allPackages returns every package in l, regardless of whether l
+// distinguishes Production from Development.
+func allPackages(l lockfile.Lock) []lockfile.Package {
+	if l.Combined {
+		return l.Packages
+	}
+
+	all := make([]lockfile.Package, 0, len(l.Packages)+len(l.PackagesDev))
+	all = append(all, l.Packages...)
+	all = append(all, l.PackagesDev...)
+
+	return all
 }
 
 // diffPackages computes the Dependency Changes for a single section (either

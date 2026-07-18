@@ -117,6 +117,25 @@ func TestRender_ExactBody(t *testing.T) {
 				"- [acme/branch-lib](https://example.com/branch-lib): dev-main (aaaaaaa) → dev-main (bbbbbbb)\n",
 		},
 		{
+			name: "combined section (no Production/Development split) renders under a single Dependencies heading",
+			in: dependencydiff.Report{
+				Sections: []dependencydiff.Section{
+					{
+						Ecosystem: lockfile.Pnpm,
+						Combined: []dependencydiff.Change{
+							{Name: "lodash", Type: dependencydiff.Added, ToVersion: "4.17.21"},
+						},
+					},
+				},
+			},
+			want: "<!-- dependency-diff-notes -->\n" +
+				"## Dependency changes\n" +
+				"\n### pnpm\n" +
+				"\n#### Dependencies\n" +
+				"\n**Added**\n\n" +
+				"- lodash: added 4.17.21\n",
+		},
+		{
 			name: "two ecosystems in the same report, each their own section",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
@@ -236,6 +255,19 @@ func TestRender_Structural(t *testing.T) {
 				},
 			},
 			wantContains: []string{"[acme/foo](https://example.com/foo)"},
+		},
+		{
+			name: "Production/Development headings absent when a section uses Combined instead",
+			in: dependencydiff.Report{
+				Sections: []dependencydiff.Section{
+					{
+						Ecosystem: lockfile.Pnpm,
+						Combined:  []dependencydiff.Change{{Name: "lodash", Type: dependencydiff.Added, ToVersion: "4.17.21"}},
+					},
+				},
+			},
+			wantContains:    []string{"#### Dependencies"},
+			wantNotContains: []string{"Production dependencies", "Development dependencies"},
 		},
 		{
 			name: "an empty section among non-empty ones is skipped entirely",

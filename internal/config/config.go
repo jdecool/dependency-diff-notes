@@ -8,6 +8,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 )
 
 // Forge identifies which code-hosting platform (see CONTEXT.md) the bot is
@@ -41,13 +43,29 @@ type Config struct {
 	Token                  string
 	ComposerLockPath       string // path to composer.lock (Composer Ecosystem, see CONTEXT.md)
 	NPMLockPath            string // path to package-lock.json (npm Ecosystem, see CONTEXT.md)
+	PnpmLockPath           string // path to pnpm-lock.yaml (pnpm Ecosystem, see CONTEXT.md)
 	RepoDir                string
 	InChangeRequestContext bool // true iff ChangeRequestIID resolved to a non-empty value
+
+	// ConsideredEcosystems is the operator-declared allowlist of Ecosystems the
+	// bot is permitted to examine for this run (see CONTEXT.md: Considered
+	// Ecosystems). The empty set means "consider all" — the default, and the
+	// historical behavior. Consult it through ConsidersEcosystem, never
+	// directly, so the empty-means-all rule stays in one place.
+	ConsideredEcosystems lockfile.EcosystemSet
+}
+
+// ConsidersEcosystem reports whether e is within the Considered Ecosystems for
+// this run: true when the allowlist is empty (consider all) or explicitly
+// contains e.
+func (c Config) ConsidersEcosystem(e lockfile.Ecosystem) bool {
+	return c.ConsideredEcosystems.IsEmpty() || c.ConsideredEcosystems.Contains(e)
 }
 
 const (
 	defaultComposerLockPath = "composer.lock"
 	defaultNPMLockPath      = "package-lock.json"
+	defaultPnpmLockPath     = "pnpm-lock.yaml"
 	defaultRepoDir          = "."
 )
 
@@ -91,7 +109,9 @@ func Load(args []string) (Config, error) {
 	token := fs.String("token", "", "Forge API token (default: $DEPENDENCY_DIFF_NOTES_TOKEN or $GITHUB_TOKEN)")
 	composerLockPath := fs.String("composer-lock-path", "", "Path to composer.lock (default: $DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH, or \"composer.lock\")")
 	npmLockPath := fs.String("npm-lock-path", "", "Path to package-lock.json (default: $DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH, or \"package-lock.json\")")
+	pnpmLockPath := fs.String("pnpm-lock-path", "", "Path to pnpm-lock.yaml (default: $DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH, or \"pnpm-lock.yaml\")")
 	repoDir := fs.String("repo-dir", "", "Path to the repository checkout (default: \".\")")
+	ecosystems := fs.String("ecosystems", "", "Comma-separated Ecosystems to consider, e.g. \"composer,pnpm\" (default: $DEPENDENCY_DIFF_NOTES_ECOSYSTEMS, or all present)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
@@ -99,11 +119,18 @@ func Load(args []string) (Config, error) {
 
 	forge := Detect()
 
+	considered, err := parseConsideredEcosystems(resolve(*ecosystems, "DEPENDENCY_DIFF_NOTES_ECOSYSTEMS", ""))
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
-		Forge:            forge,
-		ComposerLockPath: resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
-		NPMLockPath:      resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
-		RepoDir:          resolveNoEnv(*repoDir, defaultRepoDir),
+		Forge:                forge,
+		ComposerLockPath:     resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
+		NPMLockPath:          resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
+		PnpmLockPath:         resolve(*pnpmLockPath, "DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH", defaultPnpmLockPath),
+		RepoDir:              resolveNoEnv(*repoDir, defaultRepoDir),
+		ConsideredEcosystems: considered,
 	}
 
 	switch forge {
@@ -163,6 +190,32 @@ func missingSettings(cfg Config) []string {
 	}
 
 	return missing
+}
+
+// parseConsideredEcosystems parses a comma-separated list of Ecosystem tokens
+// (e.g. "composer, pnpm") into the Considered Ecosystems set (see CONTEXT.md).
+// Tokens are case-insensitive and surrounding whitespace is trimmed; empty
+// entries are skipped. An empty or whitespace-only input yields the empty set,
+// meaning "consider all". An unrecognized token is a hard error (fail-fast),
+// which is what lets a Considered-but-absent Lockfile stay silent elsewhere.
+func parseConsideredEcosystems(raw string) (lockfile.EcosystemSet, error) {
+	var set lockfile.EcosystemSet
+
+	for _, tok := range strings.Split(raw, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+
+		e, err := lockfile.ParseEcosystem(tok)
+		if err != nil {
+			return 0, fmt.Errorf("ecosystems: %w", err)
+		}
+
+		set = set.With(e)
+	}
+
+	return set, nil
 }
 
 // resolve returns the flag value if set, otherwise the environment variable
