@@ -25,21 +25,29 @@ func Render(r dependencydiff.Report) string {
 	var b strings.Builder
 
 	b.WriteString(Marker)
-	b.WriteString("\n## Composer dependency changes\n")
+	b.WriteString("\n## Dependency changes\n")
 
 	if r.IsEmpty() {
 		b.WriteString("\nNo dependency changes detected.\n")
 		return b.String()
 	}
 
-	if len(r.Production) > 0 {
-		b.WriteString("\n### Production dependencies\n")
-		writeChanges(&b, r.Production)
-	}
+	for _, s := range r.Sections {
+		if s.IsEmpty() {
+			continue
+		}
 
-	if len(r.Development) > 0 {
-		b.WriteString("\n### Development dependencies\n")
-		writeChanges(&b, r.Development)
+		fmt.Fprintf(&b, "\n### %s\n", s.Ecosystem)
+
+		if len(s.Production) > 0 {
+			b.WriteString("\n#### Production dependencies\n")
+			writeChanges(&b, s.Production)
+		}
+
+		if len(s.Development) > 0 {
+			b.WriteString("\n#### Development dependencies\n")
+			writeChanges(&b, s.Development)
+		}
 	}
 
 	return b.String()

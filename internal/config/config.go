@@ -39,13 +39,15 @@ type Config struct {
 	ChangeRequestIID       string // Merge Request IID (GitLab) or Pull Request number (GitHub)
 	TargetBranch           string
 	Token                  string
-	ComposerLockPath       string
+	ComposerLockPath       string // path to composer.lock (Composer Ecosystem, see CONTEXT.md)
+	NPMLockPath            string // path to package-lock.json (npm Ecosystem, see CONTEXT.md)
 	RepoDir                string
 	InChangeRequestContext bool // true iff ChangeRequestIID resolved to a non-empty value
 }
 
 const (
 	defaultComposerLockPath = "composer.lock"
+	defaultNPMLockPath      = "package-lock.json"
 	defaultRepoDir          = "."
 )
 
@@ -87,7 +89,8 @@ func Load(args []string) (Config, error) {
 	requestIID := fs.String("request-iid", "", "Change Request IID/number (default: $CI_MERGE_REQUEST_IID, or parsed from $GITHUB_REF)")
 	targetBranch := fs.String("target-branch", "", "Change Request target branch (default: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME or $GITHUB_BASE_REF)")
 	token := fs.String("token", "", "Forge API token (default: $DEPENDENCY_DIFF_NOTES_TOKEN or $GITHUB_TOKEN)")
-	composerLockPath := fs.String("composer-lock-path", "", "Path to composer.lock (default: $DEPENDENCY_DIFF_NOTES_LOCK_PATH, or \"composer.lock\")")
+	composerLockPath := fs.String("composer-lock-path", "", "Path to composer.lock (default: $DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH, or \"composer.lock\")")
+	npmLockPath := fs.String("npm-lock-path", "", "Path to package-lock.json (default: $DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH, or \"package-lock.json\")")
 	repoDir := fs.String("repo-dir", "", "Path to the repository checkout (default: \".\")")
 
 	if err := fs.Parse(args); err != nil {
@@ -98,7 +101,8 @@ func Load(args []string) (Config, error) {
 
 	cfg := Config{
 		Forge:            forge,
-		ComposerLockPath: resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_LOCK_PATH", defaultComposerLockPath),
+		ComposerLockPath: resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
+		NPMLockPath:      resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
 		RepoDir:          resolveNoEnv(*repoDir, defaultRepoDir),
 	}
 

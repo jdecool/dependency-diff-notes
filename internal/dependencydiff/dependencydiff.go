@@ -1,12 +1,13 @@
-// Package dependencydiff computes the Dependency Changes between two
-// composer.lock snapshots (see CONTEXT.md): the merge-base of the Change
-// Request's target branch, and the Change Request's current commit.
+// Package dependencydiff computes the Dependency Report (see CONTEXT.md) for
+// a run: the Dependency Changes for every active Ecosystem, computed between
+// the merge-base of the Change Request's target branch and the Change
+// Request's current commit.
 package dependencydiff
 
 import (
 	"sort"
 
-	"github.com/jdecool/dependency-diff-notes/internal/composerlock"
+	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 )
 
 // ChangeType classifies how a package changed between the base and head Lock.
@@ -29,21 +30,42 @@ type Change struct {
 	SourceURL     string // best-effort browsable link to the package's repository; may be empty
 }
 
-// Report is the full set of Dependency Changes between two composer.lock snapshots.
+// Section is one Ecosystem's slice of a Dependency Report (see CONTEXT.md):
+// its Production and Development Dependency Changes.
+type Section struct {
+	Ecosystem   lockfile.Ecosystem
+	Production  []Change
+	Development []Change
+}
+
+// IsEmpty reports whether the Section contains no changes at all.
+func (s Section) IsEmpty() bool {
+	return len(s.Production) == 0 && len(s.Development) == 0
+}
+
+// Report is the full Dependency Report for a run: one Section per Ecosystem
+// the bot attempted to read.
 type Report struct {
-	Production  []Change // from Lock.Packages
-	Development []Change // from Lock.PackagesDev
+	Sections []Section
 }
 
-// IsEmpty reports whether the Report contains no changes at all.
+// IsEmpty reports whether every Section of the Report is empty.
 func (r Report) IsEmpty() bool {
-	return len(r.Production) == 0 && len(r.Development) == 0
+	for _, s := range r.Sections {
+		if !s.IsEmpty() {
+			return false
+		}
+	}
+
+	return true
 }
 
-// Diff computes the Dependency Changes between base (the merge-base / target
-// branch snapshot) and head (the Change Request's current snapshot).
-func Diff(base, head composerlock.Lock) Report {
-	return Report{
+// Diff computes one Ecosystem's Section: the Dependency Changes between base
+// (the merge-base / target branch snapshot) and head (the Change Request's
+// current snapshot) of a single Lock.
+func Diff(ecosystem lockfile.Ecosystem, base, head lockfile.Lock) Section {
+	return Section{
+		Ecosystem:   ecosystem,
 		Production:  diffPackages(base.Packages, head.Packages),
 		Development: diffPackages(base.PackagesDev, head.PackagesDev),
 	}
@@ -51,7 +73,7 @@ func Diff(base, head composerlock.Lock) Report {
 
 // diffPackages computes the Dependency Changes for a single section (either
 // production or development packages), independently of the other section.
-func diffPackages(base, head []composerlock.Package) []Change {
+func diffPackages(base, head []lockfile.Package) []Change {
 	baseByName := indexByName(base)
 	headByName := indexByName(head)
 
@@ -117,8 +139,8 @@ func diffPackages(base, head []composerlock.Package) []Change {
 }
 
 // indexByName builds a lookup of packages by name.
-func indexByName(packages []composerlock.Package) map[string]composerlock.Package {
-	index := make(map[string]composerlock.Package, len(packages))
+func indexByName(packages []lockfile.Package) map[string]lockfile.Package {
+	index := make(map[string]lockfile.Package, len(packages))
 	for _, pkg := range packages {
 		index[pkg.Name] = pkg
 	}

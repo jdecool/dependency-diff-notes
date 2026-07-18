@@ -3,20 +3,22 @@ package composerlock
 import (
 	"os"
 	"testing"
+
+	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 )
 
 func TestParse(t *testing.T) {
 	tests := []struct {
 		name    string
 		file    string
-		want    Lock
+		want    lockfile.Lock
 		wantErr bool
 	}{
 		{
 			name: "realistic lock file with prod and dev packages",
 			file: "testdata/realistic.json",
-			want: Lock{
-				Packages: []Package{
+			want: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{
 						Name:      "symfony/console",
 						Version:   "v6.4.3",
@@ -24,7 +26,7 @@ func TestParse(t *testing.T) {
 						SourceURL: "https://github.com/symfony/console",
 					},
 				},
-				PackagesDev: []Package{
+				PackagesDev: []lockfile.Package{
 					{
 						Name:      "phpunit/phpunit",
 						Version:   "10.5.9",
@@ -37,8 +39,8 @@ func TestParse(t *testing.T) {
 		{
 			name: "packages missing source",
 			file: "testdata/missing_source.json",
-			want: Lock{
-				Packages: []Package{
+			want: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{
 						Name:    "acme/metapackage",
 						Version: "1.0.0",
@@ -53,8 +55,8 @@ func TestParse(t *testing.T) {
 		{
 			name: "dev-branch package with a reference",
 			file: "testdata/dev_branch.json",
-			want: Lock{
-				Packages: []Package{
+			want: lockfile.Lock{
+				Packages: []lockfile.Package{
 					{
 						Name:      "acme/dev-dependency",
 						Version:   "dev-main",
@@ -67,7 +69,7 @@ func TestParse(t *testing.T) {
 		{
 			name: "empty lock file with neither packages array populated",
 			file: "testdata/empty.json",
-			want: Lock{},
+			want: lockfile.Lock{},
 		},
 		{
 			name:    "malformed JSON",
@@ -101,7 +103,7 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func assertPackagesEqual(t *testing.T, field string, got, want []Package) {
+func assertPackagesEqual(t *testing.T, field string, got, want []lockfile.Package) {
 	t.Helper()
 
 	if len(got) != len(want) {

@@ -1,8 +1,9 @@
 # Example workflow for a consumer project's .github/workflows/.
 #
-# Reports Composer dependency changes (additions, removals, version/reference
-# updates) as a comment on the pull request. See the dependency-diff-notes
-# README for the full configuration surface.
+# Reports dependency changes (additions, removals, version/reference updates)
+# for each active Ecosystem (Composer, npm, ...) as a comment on the pull
+# request. See the dependency-diff-notes README for the full configuration
+# surface.
 
 name: dependency-diff-notes
 

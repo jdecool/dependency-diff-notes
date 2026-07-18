@@ -13,6 +13,8 @@ import (
 	"github.com/jdecool/dependency-diff-notes/internal/github"
 	"github.com/jdecool/dependency-diff-notes/internal/gitlab"
 	"github.com/jdecool/dependency-diff-notes/internal/gitref"
+	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
+	"github.com/jdecool/dependency-diff-notes/internal/npmlock"
 	"github.com/jdecool/dependency-diff-notes/internal/report"
 )
 
@@ -45,10 +47,10 @@ func main() {
 // run dispatches subcommands and returns an error instead of calling
 // os.Exit directly, so it stays testable.
 //
-// It loads the bot's configuration, computes the Composer Dependency
-// Changes (see CONTEXT.md) between the Change Request's target branch and
-// its current commit, and creates or updates the Bot Comment on the Change
-// Request accordingly.
+// It loads the bot's configuration, computes the Dependency Report (see
+// CONTEXT.md) between the Change Request's target branch and its current
+// commit, and creates or updates the Bot Comment on the Change Request
+// accordingly.
 func run(args []string) error {
 	cfg, err := config.Load(args)
 	if err != nil {
@@ -68,9 +70,28 @@ func run(args []string) error {
 	return syncComment(context.Background(), cfg, diff)
 }
 
+// ecosystemSpec pairs one Ecosystem with how to locate and parse its
+// Lockfile for this run.
+type ecosystemSpec struct {
+	ecosystem lockfile.Ecosystem
+	lockPath  string
+	parse     func([]byte) (lockfile.Lock, error)
+}
+
+// ecosystemSpecs returns the spec for every Ecosystem the bot knows how to
+// read (see CONTEXT.md), bound to cfg's configured (or default) Lockfile
+// path for each.
+func ecosystemSpecs(cfg config.Config) []ecosystemSpec {
+	return []ecosystemSpec{
+		{lockfile.Composer, cfg.ComposerLockPath, composerlock.Parse},
+		{lockfile.NPM, cfg.NPMLockPath, npmlock.Parse},
+	}
+}
+
 // computeDiff resolves the merge-base between the Change Request's target
-// branch and HEAD, reads composer.lock on both sides, and returns the
-// Dependency Changes between them.
+// branch and HEAD, and returns the Dependency Report: the Dependency
+// Changes for every Ecosystem the bot knows how to read (see
+// ecosystemSpecs), computed between the two Lockfile snapshots.
 func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
 	base, err := gitref.MergeBase(cfg.RepoDir, "origin/"+cfg.TargetBranch, "HEAD")
 	if err != nil {
@@ -79,37 +100,43 @@ func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
 			cfg.TargetBranch, err)
 	}
 
-	baseLock, err := lockAtRef(cfg.RepoDir, base, cfg.ComposerLockPath)
-	if err != nil {
-		return dependencydiff.Report{}, fmt.Errorf("read composer.lock at merge base %q: %w", base, err)
+	var report dependencydiff.Report
+
+	for _, spec := range ecosystemSpecs(cfg) {
+		baseLock, err := lockAtRef(cfg.RepoDir, base, spec.lockPath, spec.parse)
+		if err != nil {
+			return dependencydiff.Report{}, fmt.Errorf("read %s at merge base %q: %w", spec.lockPath, base, err)
+		}
+
+		headLock, err := lockAtRef(cfg.RepoDir, "HEAD", spec.lockPath, spec.parse)
+		if err != nil {
+			return dependencydiff.Report{}, fmt.Errorf("read %s at HEAD: %w", spec.lockPath, err)
+		}
+
+		report.Sections = append(report.Sections, dependencydiff.Diff(spec.ecosystem, baseLock, headLock))
 	}
 
-	headLock, err := lockAtRef(cfg.RepoDir, "HEAD", cfg.ComposerLockPath)
-	if err != nil {
-		return dependencydiff.Report{}, fmt.Errorf("read composer.lock at HEAD: %w", err)
-	}
-
-	return dependencydiff.Diff(baseLock, headLock), nil
+	return report, nil
 }
 
-// lockAtRef reads and parses composer.lock at ref, within the git
-// repository rooted at repoDir. A missing file is treated as an empty
-// Lock rather than an error: composer.lock legitimately may not have
-// existed yet on one side (e.g. a project just adopting Composer, or one
-// removing it entirely). Any other read error, or a parse failure on a
-// file that does exist, is a hard failure.
-func lockAtRef(repoDir, ref, path string) (composerlock.Lock, error) {
+// lockAtRef reads and parses a Lockfile at ref using parse, within the git
+// repository rooted at repoDir. A missing file is treated as an empty Lock
+// rather than an error: a Lockfile legitimately may not exist yet on one
+// side (e.g. a project just adopting an Ecosystem, or one dropping it
+// entirely). Any other read error, or a parse failure on a file that does
+// exist, is a hard failure.
+func lockAtRef(repoDir, ref, path string, parse func([]byte) (lockfile.Lock, error)) (lockfile.Lock, error) {
 	data, err := gitref.FileAtRef(repoDir, ref, path)
 	if err != nil {
 		if errors.Is(err, gitref.ErrFileNotFound) {
-			return composerlock.Lock{}, nil
+			return lockfile.Lock{}, nil
 		}
-		return composerlock.Lock{}, fmt.Errorf("read %s at %s: %w", path, ref, err)
+		return lockfile.Lock{}, fmt.Errorf("read %s at %s: %w", path, ref, err)
 	}
 
-	lock, err := composerlock.Parse(data)
+	lock, err := parse(data)
 	if err != nil {
-		return composerlock.Lock{}, fmt.Errorf("parse %s at %s: %w", path, ref, err)
+		return lockfile.Lock{}, fmt.Errorf("parse %s at %s: %w", path, ref, err)
 	}
 
 	return lock, nil

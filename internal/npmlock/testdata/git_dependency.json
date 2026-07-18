@@ -1,0 +1,16 @@
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "my-app",
+      "version": "1.0.0"
+    },
+    "node_modules/acme-fork": {
+      "version": "1.2.3",
+      "resolved": "git+ssh://git@github.com/acme/fork.git#abcdef1234567890abcdef1234567890abcdef12"
+    }
+  }
+}
