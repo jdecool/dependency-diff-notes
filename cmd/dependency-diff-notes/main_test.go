@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -270,7 +272,7 @@ func TestRunCreatesCommentWhenNoneExists(t *testing.T) {
 	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
 	server := newFakeGitLabServer(t, "123", "45", nil)
 
-	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+	if err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
 		t.Fatalf("run() unexpected error: %v", err)
 	}
 
@@ -307,7 +309,7 @@ func TestRunUpdatesExistingComment(t *testing.T) {
 	}
 	server := newFakeGitLabServer(t, "123", "45", existing)
 
-	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+	if err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
 		t.Fatalf("run() unexpected error: %v", err)
 	}
 
@@ -350,7 +352,7 @@ func TestRunReportsBothEcosystemsInOneComment(t *testing.T) {
 	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
 	server := newFakeGitLabServer(t, "123", "45", nil)
 
-	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+	if err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
 		t.Fatalf("run() unexpected error: %v", err)
 	}
 
@@ -406,7 +408,7 @@ func TestRunReportsPnpmCombinedSection(t *testing.T) {
 	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
 	server := newFakeGitLabServer(t, "123", "45", nil)
 
-	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+	if err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
 		t.Fatalf("run() unexpected error: %v", err)
 	}
 
@@ -451,7 +453,7 @@ func TestRunReportsYarnCombinedSection(t *testing.T) {
 	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
 	server := newFakeGitLabServer(t, "123", "45", nil)
 
-	if err := run(runArgs(repoDir, server.URL, "123", "45")); err != nil {
+	if err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
 		t.Fatalf("run() unexpected error: %v", err)
 	}
 
@@ -500,7 +502,7 @@ func TestRunFailsOnConflictingJSLockfiles(t *testing.T) {
 	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
 	server := newFakeGitLabServer(t, "123", "45", nil)
 
-	err := run(runArgs(repoDir, server.URL, "123", "45"))
+	err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard)
 	if err == nil {
 		t.Fatal("run() error = nil, want a conflict error")
 	}
@@ -540,7 +542,7 @@ func TestRunAllowlistDefusesConflictingJSLockfiles(t *testing.T) {
 	server := newFakeGitLabServer(t, "123", "45", nil)
 
 	args := append(runArgs(repoDir, server.URL, "123", "45"), "--ecosystems", "pnpm")
-	if err := run(args); err != nil {
+	if err := run(args, io.Discard); err != nil {
 		t.Fatalf("run() unexpected error with pnpm allowlisted: %v", err)
 	}
 
@@ -563,7 +565,114 @@ func TestRunNoOpOutsideChangeRequestContext(t *testing.T) {
 
 	// No server is started at all: if run() attempted any HTTP call it
 	// would fail outright, since --server-url isn't even set.
-	if err := run(nil); err != nil {
+	if err := run(nil, io.Discard); err != nil {
 		t.Fatalf("run() unexpected error: %v", err)
+	}
+}
+
+// --- Local Comparison (see CONTEXT.md) end-to-end tests ---
+
+// clearChangeRequestEnv makes sure no ambient CI environment leaks a Change
+// Request context into a Local Comparison test, which would otherwise flip
+// run() into CI mode and attempt to reach a Forge.
+func clearChangeRequestEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GITHUB_ACTIONS", "")
+	t.Setenv("CI_MERGE_REQUEST_IID", "")
+	t.Setenv("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "")
+	t.Setenv("GITHUB_BASE_REF", "")
+}
+
+// initLocalRepo initializes a git repository on "main" with a single commit
+// containing composer.lock == baseLock, and returns its directory. It needs
+// no remote: a Local Comparison resolves refs locally.
+func initLocalRepo(t *testing.T, baseLock string) string {
+	t.Helper()
+
+	workDir := t.TempDir()
+	runGit(t, workDir, "init", "-b", "main")
+	writeFile(t, workDir, "composer.lock", baseLock)
+	runGit(t, workDir, "add", "composer.lock")
+	runGit(t, workDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "Base commit")
+
+	return workDir
+}
+
+func TestRunLocalComparisonReadsWorkingTree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	clearChangeRequestEnv(t)
+
+	// main is committed with pkg1 only; the working tree adds pkg2 but is
+	// never committed. The default Source (empty) must read this on-disk state.
+	workDir := initLocalRepo(t, testBaseLock)
+	writeFile(t, workDir, "composer.lock", testHeadLock)
+
+	var buf bytes.Buffer
+	args := []string{"--target-branch", "main", "--repo-dir", workDir}
+	if err := run(args, &buf); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "+ vendor/pkg2") {
+		t.Errorf("output = %q, want a '+' addition marker for the uncommitted working-tree change vendor/pkg2", out)
+	}
+	if report.HasMarker(out) {
+		t.Errorf("output = %q, want no hidden Bot Comment marker in local terminal output", out)
+	}
+}
+
+func TestRunLocalComparisonSourceRefIgnoresWorkingTree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	clearChangeRequestEnv(t)
+
+	// main has pkg1; a feature branch commits pkg2; the working tree then adds
+	// an uncommitted pkg3. With --source HEAD the comparison must read the
+	// feature commit (pkg2), not the working tree (pkg3).
+	workDir := initLocalRepo(t, testBaseLock)
+	runGit(t, workDir, "checkout", "-b", "feature")
+	writeFile(t, workDir, "composer.lock", testHeadLock)
+	runGit(t, workDir, "add", "composer.lock")
+	runGit(t, workDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "Feature commit")
+
+	pkg3Lock := `{"packages":[{"name":"vendor/pkg1","version":"1.0.0"},{"name":"vendor/pkg2","version":"2.0.0"},{"name":"vendor/pkg3","version":"3.0.0"}],"packages-dev":[]}`
+	writeFile(t, workDir, "composer.lock", pkg3Lock)
+
+	var buf bytes.Buffer
+	args := []string{"--target-branch", "main", "--source", "HEAD", "--repo-dir", workDir}
+	if err := run(args, &buf); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "vendor/pkg2") {
+		t.Errorf("output = %q, want it to report the committed change vendor/pkg2", out)
+	}
+	if strings.Contains(out, "vendor/pkg3") {
+		t.Errorf("output = %q, want the uncommitted vendor/pkg3 to be ignored when --source is a ref", out)
+	}
+}
+
+func TestRunLocalComparisonNoChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	clearChangeRequestEnv(t)
+
+	// The working tree matches the committed base: no Dependency Changes.
+	workDir := initLocalRepo(t, testBaseLock)
+
+	var buf bytes.Buffer
+	args := []string{"--target-branch", "main", "--repo-dir", workDir}
+	if err := run(args, &buf); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if out := buf.String(); !strings.Contains(out, "No dependency changes detected.") {
+		t.Errorf("output = %q, want it to report no dependency changes", out)
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jdecool/dependency-diff-notes/internal/composerlock"
@@ -41,36 +43,51 @@ const banner = `
 
 func main() {
 	fmt.Fprint(os.Stderr, banner)
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-// run dispatches subcommands and returns an error instead of calling
-// os.Exit directly, so it stays testable.
+// run loads the bot's configuration and dispatches to one of the two run
+// modes, returning an error instead of calling os.Exit directly so it stays
+// testable. All human-facing output is written to out.
 //
-// It loads the bot's configuration, computes the Dependency Report (see
-// CONTEXT.md) between the Change Request's target branch and its current
-// commit, and creates or updates the Bot Comment on the Change Request
-// accordingly.
-func run(args []string) error {
+// The mode is auto-detected, never selected by a subcommand or flag:
+//   - In a Change Request context (a Change Request IID resolved), it computes
+//     the Dependency Report between the Change Request's target branch and its
+//     current commit and creates or updates the Bot Comment (see CONTEXT.md).
+//   - Otherwise, if a base branch was given (--target-branch), it runs a Local
+//     Comparison (see CONTEXT.md): it computes the same Dependency Report
+//     between that branch and the Source, and prints it to out instead of
+//     posting anywhere.
+//   - Otherwise there is nothing to do.
+func run(args []string, out io.Writer) error {
 	cfg, err := config.Load(args)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if !cfg.InChangeRequestContext {
-		fmt.Println("not running in a change request pipeline, nothing to do")
+	switch {
+	case cfg.InChangeRequestContext:
+		diff, err := computeDiff(cfg)
+		if err != nil {
+			return err
+		}
+		return syncComment(context.Background(), cfg, diff, out)
+
+	case cfg.TargetBranch != "":
+		diff, err := computeDiff(cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(out, report.RenderText(diff))
+		return nil
+
+	default:
+		fmt.Fprintln(out, "not running in a change request pipeline; pass --target-branch to compare locally")
 		return nil
 	}
-
-	diff, err := computeDiff(cfg)
-	if err != nil {
-		return err
-	}
-
-	return syncComment(context.Background(), cfg, diff)
 }
 
 // ecosystemSpec pairs one Ecosystem with how to locate and parse its
@@ -111,22 +128,101 @@ func ecosystemSpecs(cfg config.Config) []ecosystemSpec {
 	return specs
 }
 
-// computeDiff resolves the merge-base between the Change Request's target
-// branch and HEAD, and returns the Dependency Report: the Dependency
-// Changes for every Ecosystem the bot knows how to read (see
-// ecosystemSpecs), computed between the two Lockfile snapshots.
-func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
-	base, err := gitref.MergeBase(cfg.RepoDir, "origin/"+cfg.TargetBranch, "HEAD")
+// fileReader reads a repository-relative path from one side of a comparison,
+// returning an error wrapping gitref.ErrFileNotFound when the path is absent
+// there. Its two implementations read from a git ref (refReader) or from the
+// on-disk working tree (workTreeReader).
+type fileReader func(path string) ([]byte, error)
+
+// endpoint is one side of the Dependency Report comparison: a way to read a
+// Lockfile there, plus a human-readable label used in error messages.
+type endpoint struct {
+	read  fileReader
+	label string
+}
+
+// refReader reads paths as they existed at ref within the repository rooted
+// at repoDir (via git show).
+func refReader(repoDir, ref string) fileReader {
+	return func(path string) ([]byte, error) {
+		return gitref.FileAtRef(repoDir, ref, path)
+	}
+}
+
+// workTreeReader reads paths from the on-disk working tree rooted at repoDir,
+// including uncommitted changes. A missing file is reported as
+// gitref.ErrFileNotFound so callers can treat both endpoints uniformly.
+func workTreeReader(repoDir string) fileReader {
+	return func(path string) ([]byte, error) {
+		data, err := os.ReadFile(filepath.Join(repoDir, path))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, gitref.ErrFileNotFound
+			}
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		return data, nil
+	}
+}
+
+// resolveEndpoints determines the base and head endpoints of the comparison
+// from cfg, resolving the merge-base once.
+//
+// The base is always the merge-base of the target branch and the head
+// revision. In a Change Request context the target branch is taken as
+// "origin/<branch>" (CI checkouts have the remote-tracking ref, not
+// necessarily a local branch); in a Local Comparison it is used literally, so
+// a local branch, tag, or SHA all work (see CONTEXT.md, and
+// docs/adr/0006-local-comparison-mode.md).
+//
+// The head is HEAD in a Change Request context. In a Local Comparison it is
+// the Source: the on-disk working tree by default (cfg.Source == ""), or the
+// given ref otherwise.
+func resolveEndpoints(cfg config.Config) (base, head endpoint, err error) {
+	headRev := "HEAD"
+	if cfg.Source != "" {
+		headRev = cfg.Source
+	}
+
+	targetBranch := cfg.TargetBranch
+	if cfg.InChangeRequestContext {
+		targetBranch = "origin/" + cfg.TargetBranch
+	}
+
+	baseRef, err := gitref.MergeBase(cfg.RepoDir, targetBranch, headRev)
 	if err != nil {
-		return dependencydiff.Report{}, fmt.Errorf(
-			"resolve merge base (ensure the target branch %q is fetched, e.g. via GIT_DEPTH/git fetch in CI): %w",
-			cfg.TargetBranch, err)
+		return endpoint{}, endpoint{}, fmt.Errorf(
+			"resolve merge base of %q and %q (ensure %q is fetched, e.g. via git fetch): %w",
+			targetBranch, headRev, targetBranch, err)
+	}
+
+	base = endpoint{
+		read:  refReader(cfg.RepoDir, baseRef),
+		label: fmt.Sprintf("merge base %q", baseRef),
+	}
+
+	if !cfg.InChangeRequestContext && cfg.Source == "" {
+		head = endpoint{read: workTreeReader(cfg.RepoDir), label: "working tree"}
+	} else {
+		head = endpoint{read: refReader(cfg.RepoDir, headRev), label: headRev}
+	}
+
+	return base, head, nil
+}
+
+// computeDiff returns the Dependency Report: the Dependency Changes for every
+// Ecosystem the bot knows how to read (see ecosystemSpecs), computed between
+// the base and head endpoints resolved from cfg.
+func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
+	base, head, err := resolveEndpoints(cfg)
+	if err != nil {
+		return dependencydiff.Report{}, err
 	}
 
 	specs := ecosystemSpecs(cfg)
 
-	for _, ref := range []string{base, "HEAD"} {
-		if err := checkJSFamilyConflict(cfg.RepoDir, ref, specs); err != nil {
+	for _, ep := range []endpoint{base, head} {
+		if err := checkJSFamilyConflict(ep, specs); err != nil {
 			return dependencydiff.Report{}, err
 		}
 	}
@@ -134,14 +230,14 @@ func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
 	var report dependencydiff.Report
 
 	for _, spec := range specs {
-		baseLock, err := lockAtRef(cfg.RepoDir, base, spec.lockPath, spec.parse)
+		baseLock, err := lockAt(base.read, spec.lockPath, spec.parse)
 		if err != nil {
-			return dependencydiff.Report{}, fmt.Errorf("read %s at merge base %q: %w", spec.lockPath, base, err)
+			return dependencydiff.Report{}, fmt.Errorf("%s: %w", base.label, err)
 		}
 
-		headLock, err := lockAtRef(cfg.RepoDir, "HEAD", spec.lockPath, spec.parse)
+		headLock, err := lockAt(head.read, spec.lockPath, spec.parse)
 		if err != nil {
-			return dependencydiff.Report{}, fmt.Errorf("read %s at HEAD: %w", spec.lockPath, err)
+			return dependencydiff.Report{}, fmt.Errorf("%s: %w", head.label, err)
 		}
 
 		report.Sections = append(report.Sections, dependencydiff.Diff(spec.ecosystem, baseLock, headLock))
@@ -151,14 +247,14 @@ func computeDiff(cfg config.Config) (dependencydiff.Report, error) {
 }
 
 // checkJSFamilyConflict returns an error if more than one jsFamily
-// Ecosystem's Lockfile exists at ref (see CONTEXT.md: Lockfile) — e.g. both
-// package-lock.json and pnpm-lock.yaml present at once. The bot refuses to
-// guess which package manager is actually in use rather than silently
-// reporting both or picking one. This check runs per ref (independently at
-// the merge-base and at HEAD), not across the two: a Change Request that
-// migrates from one JavaScript package manager to another is not a
-// conflict, since the two Lockfiles never coexist at the same ref.
-func checkJSFamilyConflict(repoDir, ref string, specs []ecosystemSpec) error {
+// Ecosystem's Lockfile exists at the endpoint (see CONTEXT.md: Lockfile) —
+// e.g. both package-lock.json and pnpm-lock.yaml present at once. The bot
+// refuses to guess which package manager is actually in use rather than
+// silently reporting both or picking one. This check runs per endpoint
+// (independently for the merge-base and the head), not across the two: a
+// migration from one JavaScript package manager to another is not a conflict,
+// since the two Lockfiles never coexist at the same endpoint.
+func checkJSFamilyConflict(ep endpoint, specs []ecosystemSpec) error {
 	var present []string
 
 	for _, spec := range specs {
@@ -166,11 +262,11 @@ func checkJSFamilyConflict(repoDir, ref string, specs []ecosystemSpec) error {
 			continue
 		}
 
-		if _, err := gitref.FileAtRef(repoDir, ref, spec.lockPath); err != nil {
+		if _, err := ep.read(spec.lockPath); err != nil {
 			if errors.Is(err, gitref.ErrFileNotFound) {
 				continue
 			}
-			return fmt.Errorf("check %s at %s: %w", spec.lockPath, ref, err)
+			return fmt.Errorf("check %s at %s: %w", spec.lockPath, ep.label, err)
 		}
 
 		present = append(present, fmt.Sprintf("%s (%s)", spec.lockPath, spec.ecosystem))
@@ -179,30 +275,29 @@ func checkJSFamilyConflict(repoDir, ref string, specs []ecosystemSpec) error {
 	if len(present) > 1 {
 		return fmt.Errorf(
 			"conflicting JavaScript Lockfiles at %s: %s — a project uses at most one JavaScript package manager at a time",
-			ref, strings.Join(present, ", "))
+			ep.label, strings.Join(present, ", "))
 	}
 
 	return nil
 }
 
-// lockAtRef reads and parses a Lockfile at ref using parse, within the git
-// repository rooted at repoDir. A missing file is treated as an empty Lock
-// rather than an error: a Lockfile legitimately may not exist yet on one
-// side (e.g. a project just adopting an Ecosystem, or one dropping it
-// entirely). Any other read error, or a parse failure on a file that does
-// exist, is a hard failure.
-func lockAtRef(repoDir, ref, path string, parse func([]byte) (lockfile.Lock, error)) (lockfile.Lock, error) {
-	data, err := gitref.FileAtRef(repoDir, ref, path)
+// lockAt reads and parses a Lockfile using read (one endpoint's fileReader)
+// and parse. A missing file is treated as an empty Lock rather than an error:
+// a Lockfile legitimately may not exist yet on one side (e.g. a project just
+// adopting an Ecosystem, or one dropping it entirely). Any other read error,
+// or a parse failure on a file that does exist, is a hard failure.
+func lockAt(read fileReader, path string, parse func([]byte) (lockfile.Lock, error)) (lockfile.Lock, error) {
+	data, err := read(path)
 	if err != nil {
 		if errors.Is(err, gitref.ErrFileNotFound) {
 			return lockfile.Lock{}, nil
 		}
-		return lockfile.Lock{}, fmt.Errorf("read %s at %s: %w", path, ref, err)
+		return lockfile.Lock{}, err
 	}
 
 	lock, err := parse(data)
 	if err != nil {
-		return lockfile.Lock{}, fmt.Errorf("parse %s at %s: %w", path, ref, err)
+		return lockfile.Lock{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 
 	return lock, nil
@@ -220,9 +315,9 @@ func newForgeClient(cfg config.Config) forge.Client {
 }
 
 // syncComment creates or updates the Bot Comment on the Change Request to
-// reflect diff, per decideCommentAction, and prints a one-line confirmation
-// of the action taken.
-func syncComment(ctx context.Context, cfg config.Config, diff dependencydiff.Report) error {
+// reflect diff, per decideCommentAction, and writes a one-line confirmation
+// of the action taken to out.
+func syncComment(ctx context.Context, cfg config.Config, diff dependencydiff.Report, out io.Writer) error {
 	client := newForgeClient(cfg)
 
 	comments, err := client.ListComments(ctx)
@@ -238,16 +333,16 @@ func syncComment(ctx context.Context, cfg config.Config, diff dependencydiff.Rep
 		if _, err := client.CreateComment(ctx, body); err != nil {
 			return fmt.Errorf("create comment: %w", err)
 		}
-		fmt.Println("created the Bot Comment with the detected dependency changes")
+		fmt.Fprintln(out, "created the Bot Comment with the detected dependency changes")
 
 	case updateAction:
 		if err := client.UpdateComment(ctx, existingComment.ID, body); err != nil {
 			return fmt.Errorf("update comment: %w", err)
 		}
-		fmt.Println("updated the Bot Comment with the current dependency changes")
+		fmt.Fprintln(out, "updated the Bot Comment with the current dependency changes")
 
 	case noAction:
-		fmt.Println("no dependency changes to report")
+		fmt.Fprintln(out, "no dependency changes to report")
 	}
 
 	return nil

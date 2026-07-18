@@ -341,3 +341,69 @@ func TestHasMarker(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderText_ExactBody(t *testing.T) {
+	tests := []struct {
+		name string
+		in   dependencydiff.Report
+		want string
+	}{
+		{
+			name: "fully empty report",
+			in:   dependencydiff.Report{},
+			want: "Dependency changes\n" +
+				"\n" +
+				"No dependency changes detected.\n",
+		},
+		{
+			name: "production only, all three change types, one a reference change",
+			in: dependencydiff.Report{
+				Sections: []dependencydiff.Section{
+					{
+						Ecosystem: lockfile.Composer,
+						Production: []dependencydiff.Change{
+							{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.2.3"},
+							{Name: "acme/bar", Type: dependencydiff.Updated, FromVersion: "1.0.0", ToVersion: "1.1.0"},
+							{Name: "acme/dev", Type: dependencydiff.Updated, FromVersion: "dev-main", ToVersion: "dev-main", FromReference: "0000000aaaa", ToReference: "1111111bbbb"},
+							{Name: "acme/baz", Type: dependencydiff.Removed, FromVersion: "0.9.0"},
+						},
+					},
+				},
+			},
+			want: "Dependency changes\n" +
+				"\nComposer\n" +
+				"  Production dependencies\n" +
+				"    + acme/foo  1.2.3\n" +
+				"    ~ acme/bar  1.0.0 -> 1.1.0\n" +
+				"    ~ acme/dev  dev-main (0000000) -> dev-main (1111111)\n" +
+				"    - acme/baz  0.9.0\n",
+		},
+		{
+			name: "combined section with an empty section skipped",
+			in: dependencydiff.Report{
+				Sections: []dependencydiff.Section{
+					{Ecosystem: lockfile.Composer}, // empty: must be skipped
+					{
+						Ecosystem: lockfile.Yarn,
+						Combined: []dependencydiff.Change{
+							{Name: "lodash", Type: dependencydiff.Updated, FromVersion: "4.17.20", ToVersion: "4.17.21"},
+						},
+					},
+				},
+			},
+			want: "Dependency changes\n" +
+				"\nYarn\n" +
+				"  Dependencies\n" +
+				"    ~ lodash  4.17.20 -> 4.17.21\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := report.RenderText(tt.in)
+			if got != tt.want {
+				t.Errorf("RenderText() mismatch\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
