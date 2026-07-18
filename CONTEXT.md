@@ -34,6 +34,19 @@ The restriction is permanent for the run, not a tie-breaker consulted only on co
 A Considered Ecosystem whose Lockfile is absent is not an error — it simply contributes nothing, exactly as when no allowlist is set.
 _Avoid_: enabled/selected ecosystems, ecosystem filter (use "Considered" as the canonical adjective)
 
+**Source**:
+The new side of a comparison - what is measured against the base (the merge-base of the target branch).
+In a Change Request it is the Change Request's current commit.
+In a Local Comparison it is, by default, the on-disk working tree (including uncommitted changes), or a chosen git ref instead.
+It mirrors the source branch of a GitLab Merge Request (the branch being merged in).
+_Avoid_: head, new version
+
+**Local Comparison**:
+Running the bot outside a Change Request to compute a Dependency Report between a base branch and the Source and print it to the terminal, instead of posting a Bot Comment on a Forge.
+A developer uses it to preview the dependency changes a Change Request would report, before opening one.
+The base branch is used literally (a local branch, tag, or SHA), not resolved through a remote as it is in a Change Request context.
+_Avoid_: dry run
+
 **Dependency Change**:
 An addition, removal, or update of a package between the merge-base of the Change Request's target branch and the Change Request's current commit, computed from one Ecosystem's Lockfile.
 _Avoid_: diff, delta

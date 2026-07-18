@@ -40,6 +40,7 @@ type Config struct {
 	ProjectID              string // GitLab project ID, or GitHub "owner/repo"
 	ChangeRequestIID       string // Merge Request IID (GitLab) or Pull Request number (GitHub)
 	TargetBranch           string
+	Source                 string // Local Comparison only (see CONTEXT.md): the new side to compare against TargetBranch — empty means the on-disk working tree, otherwise a git ref (e.g. "HEAD"). Ignored in a Change Request context.
 	Token                  string
 	ComposerLockPath       string // path to composer.lock (Composer Ecosystem, see CONTEXT.md)
 	NPMLockPath            string // path to package-lock.json (npm Ecosystem, see CONTEXT.md)
@@ -107,7 +108,8 @@ func Load(args []string) (Config, error) {
 	serverURL := fs.String("server-url", "", "GitLab server URL (default: $CI_SERVER_URL; unused on GitHub)")
 	projectID := fs.String("project-id", "", "GitLab project ID or GitHub repository (default: $CI_PROJECT_ID or $GITHUB_REPOSITORY)")
 	requestIID := fs.String("request-iid", "", "Change Request IID/number (default: $CI_MERGE_REQUEST_IID, or parsed from $GITHUB_REF)")
-	targetBranch := fs.String("target-branch", "", "Change Request target branch (default: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME or $GITHUB_BASE_REF)")
+	targetBranch := fs.String("target-branch", "", "Change Request target branch (default: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME or $GITHUB_BASE_REF); outside a Change Request, the base branch of a local comparison")
+	source := fs.String("source", "", "Local comparison only: the new side to compare against --target-branch — a git ref like \"HEAD\", or empty for the on-disk working tree")
 	token := fs.String("token", "", "Forge API token (default: $DEPENDENCY_DIFF_NOTES_TOKEN or $GITHUB_TOKEN)")
 	composerLockPath := fs.String("composer-lock-path", "", "Path to composer.lock (default: $DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH, or \"composer.lock\")")
 	npmLockPath := fs.String("npm-lock-path", "", "Path to package-lock.json (default: $DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH, or \"package-lock.json\")")
@@ -134,6 +136,7 @@ func Load(args []string) (Config, error) {
 		PnpmLockPath:         resolve(*pnpmLockPath, "DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH", defaultPnpmLockPath),
 		YarnLockPath:         resolve(*yarnLockPath, "DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH", defaultYarnLockPath),
 		RepoDir:              resolveNoEnv(*repoDir, defaultRepoDir),
+		Source:               resolveNoEnv(*source, ""),
 		ConsideredEcosystems: considered,
 	}
 
