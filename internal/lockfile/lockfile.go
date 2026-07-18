@@ -17,14 +17,13 @@ const (
 	Composer Ecosystem = iota
 	NPM
 	Pnpm
+	Yarn
 )
 
 // knownEcosystems lists every Ecosystem the bot can actually read, in a
 // stable order. It backs both token validation (ParseEcosystem) and the error
-// message listing the accepted tokens. Yarn is a defined Ecosystem in the
-// domain (see CONTEXT.md) but has no parser yet, so it is deliberately absent
-// here and thus rejected as a token.
-var knownEcosystems = []Ecosystem{Composer, NPM, Pnpm}
+// message listing the accepted tokens.
+var knownEcosystems = []Ecosystem{Composer, NPM, Pnpm, Yarn}
 
 // String returns the human-readable Ecosystem name, used as the section
 // heading in the Bot Comment and as the canonical command-line token (matched
@@ -35,6 +34,8 @@ func (e Ecosystem) String() string {
 		return "npm"
 	case Pnpm:
 		return "pnpm"
+	case Yarn:
+		return "Yarn"
 	default:
 		return "Composer"
 	}

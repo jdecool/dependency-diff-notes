@@ -21,4 +21,4 @@ It also matches operator intent for the motivating scenario — a project genuin
 The trade-off is that the two models diverge on a JavaScript package-manager migration (base ref has `package-lock.json`, HEAD has `pnpm-lock.yaml`, which is not a conflict today): under the permanent model an operator who has pinned `--ecosystems=pnpm` loses the npm-removal side of the report, whereas a tie-breaker would have shown both.
 We accept this: the allowlist is an explicit, opt-in statement of "these are the Ecosystems I care about," and a run without the allowlist still reports the migration in full.
 
-Unrecognized tokens (including `yarn`, a defined Ecosystem with no parser yet) are rejected at config load rather than silently ignored, so a typo fails fast instead of quietly narrowing the report; this is also what makes the "Considered but absent Lockfile" case safe to treat as silent.
+Unrecognized tokens are rejected at config load rather than silently ignored, so a typo fails fast instead of quietly narrowing the report; this is also what makes the "Considered but absent Lockfile" case safe to treat as silent.

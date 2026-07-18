@@ -15,10 +15,11 @@ func TestParseEcosystem(t *testing.T) {
 		{name: "composer lowercase", token: "composer", want: Composer},
 		{name: "npm lowercase", token: "npm", want: NPM},
 		{name: "pnpm lowercase", token: "pnpm", want: Pnpm},
+		{name: "yarn lowercase", token: "yarn", want: Yarn},
 		{name: "case-insensitive Composer", token: "Composer", want: Composer},
 		{name: "case-insensitive PNPM", token: "PNPM", want: Pnpm},
+		{name: "case-insensitive YARN", token: "YARN", want: Yarn},
 		{name: "typo is rejected", token: "pmpm", wantErr: "unknown ecosystem"},
-		{name: "yarn is rejected until it has a parser", token: "yarn", wantErr: "unknown ecosystem"},
 		{name: "empty token is rejected", token: "", wantErr: "unknown ecosystem"},
 	}
 
@@ -34,7 +35,7 @@ func TestParseEcosystem(t *testing.T) {
 					t.Fatalf("ParseEcosystem(%q) error = %q, want it to contain %q", tt.token, err.Error(), tt.wantErr)
 				}
 				// The error lists the accepted tokens so a confused operator can fix it.
-				for _, want := range []string{"composer", "npm", "pnpm"} {
+				for _, want := range []string{"composer", "npm", "pnpm", "yarn"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("ParseEcosystem(%q) error = %q, want it to list the accepted token %q", tt.token, err.Error(), want)
 					}

@@ -5,7 +5,7 @@ A bot that comments on a Change Request with updated dependencies.
 
 It inspects a project's dependency state, determines what changed, and posts a comment on the corresponding GitLab merge request or GitHub pull request reporting them.
 
-> **Supported ecosystems:** Composer (PHP), reading from `composer.lock`; npm (JavaScript), reading from `package-lock.json`; and pnpm (JavaScript), reading from `pnpm-lock.yaml`. Yarn may follow later. A project using more than one at once (e.g. a Composer backend and an npm frontend in the same repository) gets a single Bot Comment with one section per Ecosystem — but a project with more than one JavaScript package manager's Lockfile present at once (e.g. both `package-lock.json` and `pnpm-lock.yaml`) is treated as a conflict and fails the run, since a project uses at most one at a time — unless you tell the bot which one is real with `--ecosystems` (see Configuration below).
+> **Supported ecosystems:** Composer (PHP), reading from `composer.lock`; npm (JavaScript), reading from `package-lock.json`; pnpm (JavaScript), reading from `pnpm-lock.yaml`; and Yarn (JavaScript), reading from `yarn.lock`. A project using more than one at once (e.g. a Composer backend and an npm frontend in the same repository) gets a single Bot Comment with one section per Ecosystem — but a project with more than one JavaScript package manager's Lockfile present at once (e.g. both `package-lock.json` and `pnpm-lock.yaml`) is treated as a conflict and fails the run, since a project uses at most one at a time — unless you tell the bot which one is real with `--ecosystems` (see Configuration below).
 
 ## Installation
 
@@ -30,7 +30,7 @@ Which one is active is detected automatically from the CI environment — GitHub
 
 ### GitLab CI
 
-Run as a job in a consumer project's merge request pipeline, the bot compares each active Ecosystem's Lockfile (`composer.lock`, `package-lock.json`, `pnpm-lock.yaml`) between the merge-base of the target branch and the current commit (see the description at the top of this README), and creates or updates a single note on the merge request reporting the dependency changes found.
+Run as a job in a consumer project's merge request pipeline, the bot compares each active Ecosystem's Lockfile (`composer.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) between the merge-base of the target branch and the current commit (see the description at the top of this README), and creates or updates a single note on the merge request reporting the dependency changes found.
 
 See [`examples/gitlab-ci.yml`](examples/gitlab-ci.yml) for a copy-pasteable job.
 
@@ -38,7 +38,7 @@ Outside of a merge request pipeline (`--request-iid`/`CI_MERGE_REQUEST_IID` empt
 
 ### GitHub Actions
 
-Run as a step in a consumer project's pull request workflow, the bot compares each active Ecosystem's Lockfile (`composer.lock`, `package-lock.json`, `pnpm-lock.yaml`) between the merge-base of the base branch and the current commit, and creates or updates a single comment on the pull request reporting the dependency changes found.
+Run as a step in a consumer project's pull request workflow, the bot compares each active Ecosystem's Lockfile (`composer.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) between the merge-base of the base branch and the current commit, and creates or updates a single comment on the pull request reporting the dependency changes found.
 
 See [`examples/github-actions.yml`](examples/github-actions.yml) for a copy-pasteable workflow.
 Note:
@@ -62,13 +62,14 @@ Configuration is resolved from CLI flags first, then from the matching environme
 | `--composer-lock-path` | Path to `composer.lock`           | `DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH` | `DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH` | `composer.lock` |
 | `--npm-lock-path`      | Path to `package-lock.json`       | `DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH`      | `DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH` | `package-lock.json` |
 | `--pnpm-lock-path`     | Path to `pnpm-lock.yaml`          | `DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH`     | `DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH` | `pnpm-lock.yaml` |
+| `--yarn-lock-path`     | Path to `yarn.lock`               | `DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH`     | `DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH` | `yarn.lock` |
 | `--ecosystems`         | Comma-separated Ecosystems to consider, e.g. `composer,pnpm` | `DEPENDENCY_DIFF_NOTES_ECOSYSTEMS` | `DEPENDENCY_DIFF_NOTES_ECOSYSTEMS` | all present |
 | `--repo-dir`           | Path to the repository checkout   | none                                      | none                           | `.` |
 
 `--server-url` (GitLab only), `--project-id`, `--target-branch`, and `--token` are only required once the bot detects it's running in a Change Request context (i.e. `--request-iid` resolves to a non-empty value, from the flag, `CI_MERGE_REQUEST_IID`, or `GITHUB_REF`).
-`--composer-lock-path`, `--npm-lock-path`, `--pnpm-lock-path`, and `--repo-dir` always have safe defaults and can be left unset in most setups — each Ecosystem's Lockfile is read at its default path and simply contributes no changes if the file doesn't exist, so a project using only one Ecosystem doesn't need to configure anything about the others.
+`--composer-lock-path`, `--npm-lock-path`, `--pnpm-lock-path`, `--yarn-lock-path`, and `--repo-dir` always have safe defaults and can be left unset in most setups — each Ecosystem's Lockfile is read at its default path and simply contributes no changes if the file doesn't exist, so a project using only one Ecosystem doesn't need to configure anything about the others.
 
-`--ecosystems` is an allowlist restricting the Ecosystems the bot considers for the run (tokens `composer`, `npm`, `pnpm`, case-insensitive; unknown tokens fail fast).
+`--ecosystems` is an allowlist restricting the Ecosystems the bot considers for the run (tokens `composer`, `npm`, `pnpm`, `yarn`, case-insensitive; unknown tokens fail fast).
 Left unset, every Ecosystem is considered — the historical behavior.
 Its main use is resolving the JavaScript Lockfile conflict above: on a project that carries both `package-lock.json` and `pnpm-lock.yaml`, set `--ecosystems=composer,pnpm` (or just `pnpm`) to tell the bot which JavaScript package manager is real, and the stray Lockfile is ignored for the whole run.
 The restriction is permanent, not consulted only on conflict, so an excluded Ecosystem is dropped at every ref (see `docs/adr/0005-ecosystem-allowlist.md`).
@@ -76,6 +77,10 @@ The restriction is permanent, not consulted only on conflict, so an excluded Eco
 ### pnpm lockfileVersion support
 
 The bot reads `pnpm-lock.yaml` across pnpm's three lockfile formats: `5.x`, `6.0`, and `9.0` (there is no `7.0`/`8.0` lockfileVersion, despite pnpm CLI majors 7 and 8 existing). lockfileVersion 9.0 (pnpm ≥9, the current major version) dropped the per-package `dev` flag entirely — see `docs/pnpm-lockfile-schema.md` — so a pnpm section only gets the Production/Development split on `5.x`/`6.0` Lockfiles; a `9.0` Lockfile reports a single undifferentiated Dependencies group instead, unlike Composer's `composer.lock` and npm's `package-lock.json`, which always split.
+
+### Yarn support
+
+The bot reads `yarn.lock` across both of Yarn's incompatible formats: Classic (v1) and Berry (v2+) — see `docs/yarn-lockfile-schema.md`. Neither format records a production-vs-development distinction per package (that information lives only in `package.json`, which the bot does not read), so a Yarn section always reports a single undifferentiated Dependencies group, regardless of format.
 
 ## Development
 
