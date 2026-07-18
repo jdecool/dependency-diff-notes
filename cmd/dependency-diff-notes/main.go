@@ -87,14 +87,26 @@ type ecosystemSpec struct {
 }
 
 // ecosystemSpecs returns the spec for every Ecosystem the bot knows how to
-// read (see CONTEXT.md), bound to cfg's configured (or default) Lockfile
-// path for each.
+// read (see CONTEXT.md), bound to cfg's configured (or default) Lockfile path
+// for each, restricted to the Considered Ecosystems (see CONTEXT.md): when the
+// operator declares an allowlist, the excluded Ecosystems are dropped for the
+// whole run, which is also what defuses the JavaScript Lockfile conflict when
+// the allowlist keeps at most one JavaScript Ecosystem.
 func ecosystemSpecs(cfg config.Config) []ecosystemSpec {
-	return []ecosystemSpec{
+	all := []ecosystemSpec{
 		{lockfile.Composer, cfg.ComposerLockPath, composerlock.Parse, false},
 		{lockfile.NPM, cfg.NPMLockPath, npmlock.Parse, true},
 		{lockfile.Pnpm, cfg.PnpmLockPath, pnpmlock.Parse, true},
 	}
+
+	var specs []ecosystemSpec
+	for _, spec := range all {
+		if cfg.ConsidersEcosystem(spec.ecosystem) {
+			specs = append(specs, spec)
+		}
+	}
+
+	return specs
 }
 
 // computeDiff resolves the merge-base between the Change Request's target

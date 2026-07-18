@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 )
 
 // allEnvVars lists every environment variable Load ever reads, across both
@@ -18,6 +20,7 @@ var allEnvVars = []string{
 	"DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH",
 	"DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH",
 	"DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH",
+	"DEPENDENCY_DIFF_NOTES_ECOSYSTEMS",
 	"GITHUB_REPOSITORY",
 	"GITHUB_REF",
 	"GITHUB_BASE_REF",
@@ -309,6 +312,113 @@ func TestLoad_GitHub(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Fatalf("Load() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_ConsideredEcosystems(t *testing.T) {
+	// These cases run outside a change request context (no request IID), so
+	// Load returns the resolved Config without requiring the Forge settings;
+	// only the ConsideredEcosystems resolution is under test. The other fields
+	// take their defaults.
+	base := Config{
+		Forge:                  GitLab,
+		ComposerLockPath:       defaultComposerLockPath,
+		NPMLockPath:            defaultNPMLockPath,
+		PnpmLockPath:           defaultPnpmLockPath,
+		RepoDir:                defaultRepoDir,
+		InChangeRequestContext: false,
+	}
+
+	withConsidered := func(es ...lockfile.Ecosystem) Config {
+		cfg := base
+		for _, e := range es {
+			cfg.ConsideredEcosystems = cfg.ConsideredEcosystems.With(e)
+		}
+		return cfg
+	}
+
+	tests := []struct {
+		name        string
+		args        []string
+		env         map[string]string
+		wantErr     string // non-empty substring expected in the error, "" means no error
+		want        Config
+		wantConsids map[lockfile.Ecosystem]bool // expected ConsidersEcosystem results
+	}{
+		{
+			name:        "unset means empty set, all considered",
+			args:        []string{},
+			want:        base,
+			wantConsids: map[lockfile.Ecosystem]bool{lockfile.Composer: true, lockfile.NPM: true, lockfile.Pnpm: true},
+		},
+		{
+			name:        "flag restricts to a subset",
+			args:        []string{"--ecosystems", "composer,pnpm"},
+			want:        withConsidered(lockfile.Composer, lockfile.Pnpm),
+			wantConsids: map[lockfile.Ecosystem]bool{lockfile.Composer: true, lockfile.NPM: false, lockfile.Pnpm: true},
+		},
+		{
+			name:        "case-insensitive with surrounding whitespace",
+			args:        []string{"--ecosystems", "Composer,  PNPM "},
+			want:        withConsidered(lockfile.Composer, lockfile.Pnpm),
+			wantConsids: map[lockfile.Ecosystem]bool{lockfile.Composer: true, lockfile.NPM: false, lockfile.Pnpm: true},
+		},
+		{
+			name:        "env var is honored when the flag is absent",
+			args:        []string{},
+			env:         map[string]string{"DEPENDENCY_DIFF_NOTES_ECOSYSTEMS": "npm"},
+			want:        withConsidered(lockfile.NPM),
+			wantConsids: map[lockfile.Ecosystem]bool{lockfile.Composer: false, lockfile.NPM: true, lockfile.Pnpm: false},
+		},
+		{
+			name:        "flag overrides env",
+			args:        []string{"--ecosystems", "composer"},
+			env:         map[string]string{"DEPENDENCY_DIFF_NOTES_ECOSYSTEMS": "npm"},
+			want:        withConsidered(lockfile.Composer),
+			wantConsids: map[lockfile.Ecosystem]bool{lockfile.Composer: true, lockfile.NPM: false, lockfile.Pnpm: false},
+		},
+		{
+			name:    "unknown token is a fail-fast error",
+			args:    []string{"--ecosystems", "composer,pmpm"},
+			wantErr: "unknown ecosystem",
+		},
+		{
+			name:    "yarn is rejected until it has a parser",
+			args:    []string{"--ecosystems", "yarn"},
+			wantErr: "unknown ecosystem",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range allEnvVars {
+				t.Setenv(name, tt.env[name])
+			}
+
+			got, err := Load(tt.args)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want error containing %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %q, want it to contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("Load() = %+v, want %+v", got, tt.want)
+			}
+			for e, want := range tt.wantConsids {
+				if got.ConsidersEcosystem(e) != want {
+					t.Errorf("ConsidersEcosystem(%v) = %v, want %v", e, got.ConsidersEcosystem(e), want)
+				}
 			}
 		})
 	}

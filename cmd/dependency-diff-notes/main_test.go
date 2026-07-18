@@ -467,6 +467,49 @@ func TestRunFailsOnConflictingJSLockfiles(t *testing.T) {
 	}
 }
 
+func TestRunAllowlistDefusesConflictingJSLockfiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// Pin the Forge to GitLab: on a GitHub Actions runner GITHUB_ACTIONS=true
+	// would otherwise make config.Detect() pick GitHub and ignore the fake
+	// GitLab server below.
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// Same setup as TestRunFailsOnConflictingJSLockfiles: both package-lock.json
+	// and pnpm-lock.yaml present at HEAD. Restricting the Considered Ecosystems
+	// to pnpm drops npm for the whole run, so the conflict never arises and only
+	// the pnpm section is reported.
+	pkgLock := `{"packages":{"":{"name":"my-app"},"node_modules/lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"}}}`
+	pnpmLock := "lockfileVersion: '9.0'\npackages:\n  lodash@4.17.21:\n    resolution: {integrity: sha512-example==}\n"
+
+	baseFiles := map[string]string{"README.md": "base"}
+	headFiles := map[string]string{
+		"README.md":         "base",
+		"package-lock.json": pkgLock,
+		"pnpm-lock.yaml":    pnpmLock,
+	}
+
+	repoDir := setupMultiFileOrchestrationRepo(t, baseFiles, headFiles)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+
+	args := append(runArgs(repoDir, server.URL, "123", "45"), "--ecosystems", "pnpm")
+	if err := run(args); err != nil {
+		t.Fatalf("run() unexpected error with pnpm allowlisted: %v", err)
+	}
+
+	if !server.createCalled {
+		t.Fatal("expected CreateNote to be called")
+	}
+	if !strings.Contains(server.createBody, "### pnpm") {
+		t.Errorf("create note body = %q, want a pnpm section", server.createBody)
+	}
+	if strings.Contains(server.createBody, "### npm") {
+		t.Errorf("create note body = %q, want npm to be excluded by the allowlist", server.createBody)
+	}
+}
+
 func TestRunNoOpOutsideChangeRequestContext(t *testing.T) {
 	// Make sure no ambient CI environment leaks a change request context
 	// into this test.

@@ -4,6 +4,11 @@
 // Lockfile format (see CONTEXT.md) a Lock was read from.
 package lockfile
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Ecosystem identifies which (language, package manager) pairing a Lock was
 // parsed from (see CONTEXT.md).
 type Ecosystem int
@@ -14,8 +19,16 @@ const (
 	Pnpm
 )
 
+// knownEcosystems lists every Ecosystem the bot can actually read, in a
+// stable order. It backs both token validation (ParseEcosystem) and the error
+// message listing the accepted tokens. Yarn is a defined Ecosystem in the
+// domain (see CONTEXT.md) but has no parser yet, so it is deliberately absent
+// here and thus rejected as a token.
+var knownEcosystems = []Ecosystem{Composer, NPM, Pnpm}
+
 // String returns the human-readable Ecosystem name, used as the section
-// heading in the Bot Comment.
+// heading in the Bot Comment and as the canonical command-line token (matched
+// case-insensitively by ParseEcosystem).
 func (e Ecosystem) String() string {
 	switch e {
 	case NPM:
@@ -25,6 +38,49 @@ func (e Ecosystem) String() string {
 	default:
 		return "Composer"
 	}
+}
+
+// ParseEcosystem resolves a case-insensitive token (e.g. "composer", "PNPM")
+// to its Ecosystem, or returns an error naming the accepted tokens. Only
+// Ecosystems the bot can actually read are accepted (see knownEcosystems).
+func ParseEcosystem(s string) (Ecosystem, error) {
+	for _, e := range knownEcosystems {
+		if strings.EqualFold(s, e.String()) {
+			return e, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown ecosystem %q (known: %s)", s, strings.Join(ecosystemTokens(), ", "))
+}
+
+// ecosystemTokens returns the accepted command-line tokens (lowercased Ecosystem
+// names), in knownEcosystems order, for use in validation error messages.
+func ecosystemTokens() []string {
+	tokens := make([]string, len(knownEcosystems))
+	for i, e := range knownEcosystems {
+		tokens[i] = strings.ToLower(e.String())
+	}
+	return tokens
+}
+
+// EcosystemSet is a set of Ecosystems, used to represent the Considered
+// Ecosystems (see CONTEXT.md) an operator restricts a run to. It is a bitmask
+// so it stays a comparable value (Config embeds it and is compared with ==).
+// The zero value is the empty set.
+type EcosystemSet uint
+
+// With returns s with e added.
+func (s EcosystemSet) With(e Ecosystem) EcosystemSet {
+	return s | 1<<uint(e)
+}
+
+// Contains reports whether e is a member of s.
+func (s EcosystemSet) Contains(e Ecosystem) bool {
+	return s&(1<<uint(e)) != 0
+}
+
+// IsEmpty reports whether s has no members.
+func (s EcosystemSet) IsEmpty() bool {
+	return s == 0
 }
 
 // Package is a single dependency entry from a Lock.

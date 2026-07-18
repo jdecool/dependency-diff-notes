@@ -26,6 +26,14 @@ _Avoid_: language, package manager (each names one half of the pairing; use them
 The file recording a project's exact resolved dependency state for one Ecosystem: `composer.lock` (Composer), `package-lock.json` (npm), `yarn.lock` (Yarn), `pnpm-lock.yaml` (pnpm).
 An Ecosystem is active for a given ref when its Lockfile exists at that ref; detected independently at the merge-base and at the Change Request's current commit (see Dependency Change), not as a single combined check — a Change Request that migrates from one Ecosystem to another (e.g. Yarn → pnpm) is not a conflict, since the two Lockfiles never coexist at the same ref.
 Two Lockfiles of different JavaScript package managers coexisting at the *same* ref (e.g. both `yarn.lock` and `package-lock.json` present at HEAD) is a genuine conflict the bot refuses to guess about, and fails the run instead of picking one — reachable today between npm and pnpm, since both are implemented; Composer never participates in this conflict, since its Lockfile doesn't compete for the same role.
+An operator can pre-empt this conflict by restricting the Considered Ecosystems (see below) to keep at most one JavaScript Ecosystem — the excluded one is then dropped for the whole run and never competes for the role.
+
+**Considered Ecosystems**:
+The set of Ecosystems the bot is permitted to examine for a run, as declared by the operator; all Ecosystems by default.
+It is an allowlist independent of Lockfile presence: an Ecosystem produces a section of the Dependency Report only when it is both *Considered* (in the allowlist, or all by default) and *active* (its Lockfile present at the ref — see Lockfile).
+The restriction is permanent for the run, not a tie-breaker consulted only on conflict: an excluded Ecosystem is ignored at every ref, even where no other Lockfile competes with it (see `docs/adr/0005-ecosystem-allowlist.md`).
+A Considered Ecosystem whose Lockfile is absent is not an error — it simply contributes nothing, exactly as when no allowlist is set.
+_Avoid_: enabled/selected ecosystems, ecosystem filter (use "Considered" as the canonical adjective)
 
 **Dependency Change**:
 An addition, removal, or update of a package between the merge-base of the Change Request's target branch and the Change Request's current commit, computed from one Ecosystem's Lockfile.
