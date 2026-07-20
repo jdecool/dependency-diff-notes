@@ -418,7 +418,7 @@ func TestRunReportsPnpmCombinedSection(t *testing.T) {
 	if !strings.Contains(server.createBody, "### pnpm") {
 		t.Errorf("create note body = %q, want it to contain a pnpm section", server.createBody)
 	}
-	if !strings.Contains(server.createBody, "#### Dependencies") {
+	if !strings.Contains(server.createBody, "<summary>Dependencies (1)</summary>") {
 		t.Errorf("create note body = %q, want a single undifferentiated Dependencies group (lockfileVersion 9.0 has no dev/prod split)", server.createBody)
 	}
 	if strings.Contains(server.createBody, "Production dependencies") || strings.Contains(server.createBody, "Development dependencies") {
@@ -463,7 +463,7 @@ func TestRunReportsYarnCombinedSection(t *testing.T) {
 	if !strings.Contains(server.createBody, "### Yarn") {
 		t.Errorf("create note body = %q, want it to contain a Yarn section", server.createBody)
 	}
-	if !strings.Contains(server.createBody, "#### Dependencies") {
+	if !strings.Contains(server.createBody, "<summary>Dependencies (1)</summary>") {
 		t.Errorf("create note body = %q, want a single undifferentiated Dependencies group (yarn.lock has no dev/prod split)", server.createBody)
 	}
 	if strings.Contains(server.createBody, "Production dependencies") || strings.Contains(server.createBody, "Development dependencies") {

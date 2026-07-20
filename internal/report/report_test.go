@@ -24,7 +24,7 @@ func TestRender_ExactBody(t *testing.T) {
 				"No dependency changes detected.\n",
 		},
 		{
-			name: "production only, all three change types, one removed without SourceURL",
+			name: "production only, every change type, one removed without SourceURL",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
@@ -39,6 +39,7 @@ func TestRender_ExactBody(t *testing.T) {
 							{
 								Name:        "acme/bar",
 								Type:        dependencydiff.Updated,
+								Direction:   dependencydiff.Upgrade,
 								FromVersion: "1.0.0",
 								ToVersion:   "1.1.0",
 								SourceURL:   "https://example.com/bar",
@@ -56,28 +57,27 @@ func TestRender_ExactBody(t *testing.T) {
 			want: "<!-- dependency-diff-notes -->\n" +
 				"## Dependency changes\n" +
 				"\n### Composer\n" +
-				"\n#### Production dependencies\n" +
-				"\n**Added**\n\n" +
-				"- [acme/foo](https://example.com/foo): added 1.2.3\n" +
-				"\n**Updated**\n\n" +
-				"- [acme/bar](https://example.com/bar): 1.0.0 → 1.1.0\n" +
-				"\n**Removed**\n\n" +
-				"- acme/baz: removed 0.9.0\n",
+				"\n<details open>\n<summary><strong>3 changes</strong></summary>\n" +
+				"\n<details open>\n<summary>Production dependencies (3)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| [acme/foo](https://example.com/foo) | ➕ Added | 1.2.3 |\n" +
+				"| [acme/bar](https://example.com/bar) | ⬆️ Upgraded | 1.0.0 → 1.1.0 |\n" +
+				"| acme/baz | ➖ Removed | 0.9.0 |\n" +
+				"\n</details>\n" +
+				"\n</details>\n",
 		},
 		{
-			name: "development only, added dev branch package with reference",
+			name: "development group is collapsed while production stays open",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
 						Ecosystem: lockfile.Composer,
+						Production: []dependencydiff.Change{
+							{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"},
+						},
 						Development: []dependencydiff.Change{
-							{
-								Name:        "acme/dev-lib",
-								Type:        dependencydiff.Added,
-								ToVersion:   "dev-main",
-								ToReference: "a1b2c3d4e5f6",
-								SourceURL:   "https://example.com/dev-lib",
-							},
+							{Name: "acme/dev-tool", Type: dependencydiff.Added, ToVersion: "2.0.0"},
 						},
 					},
 				},
@@ -85,12 +85,44 @@ func TestRender_ExactBody(t *testing.T) {
 			want: "<!-- dependency-diff-notes -->\n" +
 				"## Dependency changes\n" +
 				"\n### Composer\n" +
-				"\n#### Development dependencies\n" +
-				"\n**Added**\n\n" +
-				"- [acme/dev-lib](https://example.com/dev-lib): added dev-main (a1b2c3d)\n",
+				"\n<details open>\n<summary><strong>2 changes</strong></summary>\n" +
+				"\n<details open>\n<summary>Production dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| acme/foo | ➕ Added | 1.0.0 |\n" +
+				"\n</details>\n" +
+				"\n<details>\n<summary>Development dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| acme/dev-tool | ➕ Added | 2.0.0 |\n" +
+				"\n</details>\n" +
+				"\n</details>\n",
 		},
 		{
-			name: "updated entry with only a reference change (version label unchanged)",
+			name: "single change uses the singular noun",
+			in: dependencydiff.Report{
+				Sections: []dependencydiff.Section{
+					{
+						Ecosystem: lockfile.Composer,
+						Production: []dependencydiff.Change{
+							{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"},
+						},
+					},
+				},
+			},
+			want: "<!-- dependency-diff-notes -->\n" +
+				"## Dependency changes\n" +
+				"\n### Composer\n" +
+				"\n<details open>\n<summary><strong>1 change</strong></summary>\n" +
+				"\n<details open>\n<summary>Production dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| acme/foo | ➕ Added | 1.0.0 |\n" +
+				"\n</details>\n" +
+				"\n</details>\n",
+		},
+		{
+			name: "reference change without a version move is reported as a plain change",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
@@ -112,12 +144,16 @@ func TestRender_ExactBody(t *testing.T) {
 			want: "<!-- dependency-diff-notes -->\n" +
 				"## Dependency changes\n" +
 				"\n### Composer\n" +
-				"\n#### Production dependencies\n" +
-				"\n**Updated**\n\n" +
-				"- [acme/branch-lib](https://example.com/branch-lib): dev-main (aaaaaaa) → dev-main (bbbbbbb)\n",
+				"\n<details open>\n<summary><strong>1 change</strong></summary>\n" +
+				"\n<details open>\n<summary>Production dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| [acme/branch-lib](https://example.com/branch-lib) | 🔄 Changed | dev-main (aaaaaaa) → dev-main (bbbbbbb) |\n" +
+				"\n</details>\n" +
+				"\n</details>\n",
 		},
 		{
-			name: "combined section (no Production/Development split) renders under a single Dependencies heading",
+			name: "combined section renders a single open Dependencies group",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
@@ -131,12 +167,16 @@ func TestRender_ExactBody(t *testing.T) {
 			want: "<!-- dependency-diff-notes -->\n" +
 				"## Dependency changes\n" +
 				"\n### pnpm\n" +
-				"\n#### Dependencies\n" +
-				"\n**Added**\n\n" +
-				"- lodash: added 4.17.21\n",
+				"\n<details open>\n<summary><strong>1 change</strong></summary>\n" +
+				"\n<details open>\n<summary>Dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| lodash | ➕ Added | 4.17.21 |\n" +
+				"\n</details>\n" +
+				"\n</details>\n",
 		},
 		{
-			name: "two ecosystems in the same report, each their own section",
+			name: "two ecosystems get a linked summary line and one section each",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
@@ -148,21 +188,30 @@ func TestRender_ExactBody(t *testing.T) {
 					{
 						Ecosystem: lockfile.NPM,
 						Production: []dependencydiff.Change{
-							{Name: "lodash", Type: dependencydiff.Added, ToVersion: "4.17.21"},
+							{Name: "lodash", Type: dependencydiff.Removed, FromVersion: "4.17.21"},
 						},
 					},
 				},
 			},
 			want: "<!-- dependency-diff-notes -->\n" +
 				"## Dependency changes\n" +
+				"\n[Composer](#composer) 1 · [npm](#npm) 1\n" +
 				"\n### Composer\n" +
-				"\n#### Production dependencies\n" +
-				"\n**Added**\n\n" +
-				"- acme/foo: added 1.0.0\n" +
+				"\n<details open>\n<summary><strong>1 change</strong></summary>\n" +
+				"\n<details open>\n<summary>Production dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| acme/foo | ➕ Added | 1.0.0 |\n" +
+				"\n</details>\n" +
+				"\n</details>\n" +
 				"\n### npm\n" +
-				"\n#### Production dependencies\n" +
-				"\n**Added**\n\n" +
-				"- lodash: added 4.17.21\n",
+				"\n<details open>\n<summary><strong>1 change</strong></summary>\n" +
+				"\n<details open>\n<summary>Production dependencies (1)</summary>\n\n" +
+				"| Package | Change | Version |\n" +
+				"|---|---|---|\n" +
+				"| lodash | ➖ Removed | 4.17.21 |\n" +
+				"\n</details>\n" +
+				"\n</details>\n",
 		},
 	}
 
@@ -177,6 +226,15 @@ func TestRender_ExactBody(t *testing.T) {
 }
 
 func TestRender_Structural(t *testing.T) {
+	composerOnly := dependencydiff.Report{
+		Sections: []dependencydiff.Section{
+			{
+				Ecosystem:  lockfile.Composer,
+				Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
+			},
+		},
+	}
+
 	tests := []struct {
 		name            string
 		in              dependencydiff.Report
@@ -184,31 +242,22 @@ func TestRender_Structural(t *testing.T) {
 		wantNotContains []string
 	}{
 		{
-			name: "marker always present",
-			in: dependencydiff.Report{
-				Sections: []dependencydiff.Section{
-					{
-						Ecosystem:  lockfile.Composer,
-						Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
-					},
-				},
-			},
+			name:         "marker always present",
+			in:           composerOnly,
 			wantContains: []string{report.Marker},
 		},
 		{
-			name: "development section absent when Development is empty",
-			in: dependencydiff.Report{
-				Sections: []dependencydiff.Section{
-					{
-						Ecosystem:  lockfile.Composer,
-						Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
-					},
-				},
-			},
+			name:            "summary line omitted for a single ecosystem",
+			in:              composerOnly,
+			wantNotContains: []string{"(#composer)"},
+		},
+		{
+			name:            "development group absent when Development is empty",
+			in:              composerOnly,
 			wantNotContains: []string{"Development dependencies"},
 		},
 		{
-			name: "production section absent when Production is empty",
+			name: "production group absent when Production is empty",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
@@ -220,57 +269,35 @@ func TestRender_Structural(t *testing.T) {
 			wantNotContains: []string{"Production dependencies"},
 		},
 		{
-			name: "group label absent when a group has no entries",
-			in: dependencydiff.Report{
-				Sections: []dependencydiff.Section{
-					{
-						Ecosystem:  lockfile.Composer,
-						Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
-					},
-				},
-			},
-			wantNotContains: []string{"**Updated**", "**Removed**"},
+			name: "ecosystem heading stays outside the details, so its anchor survives",
+			in:   composerOnly,
+			// The heading must precede the <details>, never sit inside the <summary>.
+			wantContains:    []string{"### Composer\n\n<details open>"},
+			wantNotContains: []string{"<summary><strong>Composer"},
 		},
 		{
-			name: "package without SourceURL renders as plain text, not a link",
-			in: dependencydiff.Report{
-				Sections: []dependencydiff.Section{
-					{
-						Ecosystem:  lockfile.Composer,
-						Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Removed, FromVersion: "1.0.0"}},
-					},
-				},
-			},
-			wantContains:    []string{"- acme/foo: removed 1.0.0"},
+			name:            "package without SourceURL renders as plain text, not a link",
+			in:              dependencydiff.Report{Sections: []dependencydiff.Section{{Ecosystem: lockfile.Composer, Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Removed, FromVersion: "1.0.0"}}}}},
+			wantContains:    []string{"| acme/foo | ➖ Removed | 1.0.0 |"},
 			wantNotContains: []string{"[acme/foo]"},
 		},
 		{
-			name: "package with SourceURL renders as a Markdown link",
-			in: dependencydiff.Report{
-				Sections: []dependencydiff.Section{
-					{
-						Ecosystem:  lockfile.Composer,
-						Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0", SourceURL: "https://example.com/foo"}},
-					},
-				},
-			},
+			name:         "package with SourceURL renders as a Markdown link",
+			in:           dependencydiff.Report{Sections: []dependencydiff.Section{{Ecosystem: lockfile.Composer, Production: []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0", SourceURL: "https://example.com/foo"}}}}},
 			wantContains: []string{"[acme/foo](https://example.com/foo)"},
 		},
 		{
-			name: "Production/Development headings absent when a section uses Combined instead",
+			name: "Production/Development groups absent when a section uses Combined instead",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
-					{
-						Ecosystem: lockfile.Pnpm,
-						Combined:  []dependencydiff.Change{{Name: "lodash", Type: dependencydiff.Added, ToVersion: "4.17.21"}},
-					},
+					{Ecosystem: lockfile.Pnpm, Combined: []dependencydiff.Change{{Name: "lodash", Type: dependencydiff.Added, ToVersion: "4.17.21"}}},
 				},
 			},
-			wantContains:    []string{"#### Dependencies"},
+			wantContains:    []string{"<summary>Dependencies (1)</summary>"},
 			wantNotContains: []string{"Production dependencies", "Development dependencies"},
 		},
 		{
-			name: "an empty section among non-empty ones is skipped entirely",
+			name: "an empty section among non-empty ones is skipped entirely, summary line included",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{Ecosystem: lockfile.Composer},
@@ -281,7 +308,19 @@ func TestRender_Structural(t *testing.T) {
 				},
 			},
 			wantContains:    []string{"### npm"},
-			wantNotContains: []string{"### Composer"},
+			wantNotContains: []string{"### Composer", "Composer](#composer)"},
+		},
+		{
+			name: "a pipe inside a version does not break the table",
+			in: dependencydiff.Report{
+				Sections: []dependencydiff.Section{
+					{
+						Ecosystem:  lockfile.NPM,
+						Production: []dependencydiff.Change{{Name: "weird", Type: dependencydiff.Added, ToVersion: "git+https://example.com/p.git?a=1|b=2"}},
+					},
+				},
+			},
+			wantContains: []string{`| weird | ➕ Added | git+https://example.com/p.git?a=1\|b=2 |`},
 		},
 	}
 
@@ -301,6 +340,29 @@ func TestRender_Structural(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRender_TableSeparatedFromSummary guards the one formatting rule both
+// Forges are unforgiving about: a Markdown table nested in an HTML block is
+// only parsed when a blank line separates it from the <summary> above it.
+func TestRender_TableSeparatedFromSummary(t *testing.T) {
+	got := report.Render(dependencydiff.Report{
+		Sections: []dependencydiff.Section{
+			{
+				Ecosystem:   lockfile.Composer,
+				Production:  []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
+				Development: []dependencydiff.Change{{Name: "acme/bar", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
+			},
+		},
+	})
+
+	if strings.Contains(got, "</summary>\n|") {
+		t.Errorf("Render() puts a table directly after a </summary> without a blank line:\n%s", got)
+	}
+
+	if !strings.Contains(got, "</summary>\n\n| Package |") {
+		t.Errorf("Render() = %q, want every table preceded by a blank line after its summary", got)
 	}
 }
 
@@ -356,14 +418,15 @@ func TestRenderText_ExactBody(t *testing.T) {
 				"No dependency changes detected.\n",
 		},
 		{
-			name: "production only, all three change types, one a reference change",
+			name: "every marker, including both update directions",
 			in: dependencydiff.Report{
 				Sections: []dependencydiff.Section{
 					{
 						Ecosystem: lockfile.Composer,
 						Production: []dependencydiff.Change{
 							{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.2.3"},
-							{Name: "acme/bar", Type: dependencydiff.Updated, FromVersion: "1.0.0", ToVersion: "1.1.0"},
+							{Name: "acme/bar", Type: dependencydiff.Updated, Direction: dependencydiff.Upgrade, FromVersion: "1.0.0", ToVersion: "1.1.0"},
+							{Name: "acme/old", Type: dependencydiff.Updated, Direction: dependencydiff.Downgrade, FromVersion: "2.1.0", ToVersion: "2.0.0"},
 							{Name: "acme/dev", Type: dependencydiff.Updated, FromVersion: "dev-main", ToVersion: "dev-main", FromReference: "0000000aaaa", ToReference: "1111111bbbb"},
 							{Name: "acme/baz", Type: dependencydiff.Removed, FromVersion: "0.9.0"},
 						},
@@ -374,7 +437,8 @@ func TestRenderText_ExactBody(t *testing.T) {
 				"\nComposer\n" +
 				"  Production dependencies\n" +
 				"    + acme/foo  1.2.3\n" +
-				"    ~ acme/bar  1.0.0 -> 1.1.0\n" +
+				"    ↑ acme/bar  1.0.0 -> 1.1.0\n" +
+				"    ↓ acme/old  2.1.0 -> 2.0.0\n" +
 				"    ~ acme/dev  dev-main (0000000) -> dev-main (1111111)\n" +
 				"    - acme/baz  0.9.0\n",
 		},
@@ -386,7 +450,7 @@ func TestRenderText_ExactBody(t *testing.T) {
 					{
 						Ecosystem: lockfile.Yarn,
 						Combined: []dependencydiff.Change{
-							{Name: "lodash", Type: dependencydiff.Updated, FromVersion: "4.17.20", ToVersion: "4.17.21"},
+							{Name: "lodash", Type: dependencydiff.Updated, Direction: dependencydiff.Upgrade, FromVersion: "4.17.20", ToVersion: "4.17.21"},
 						},
 					},
 				},
@@ -394,7 +458,7 @@ func TestRenderText_ExactBody(t *testing.T) {
 			want: "Dependency changes\n" +
 				"\nYarn\n" +
 				"  Dependencies\n" +
-				"    ~ lodash  4.17.20 -> 4.17.21\n",
+				"    ↑ lodash  4.17.20 -> 4.17.21\n",
 		},
 	}
 
