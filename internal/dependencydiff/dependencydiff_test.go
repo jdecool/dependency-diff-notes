@@ -73,6 +73,7 @@ func TestDiff(t *testing.T) {
 					{
 						Name:          "acme/foo",
 						Type:          Updated,
+						Direction:     Upgrade,
 						FromVersion:   "1.0.0",
 						ToVersion:     "1.1.0",
 						FromReference: "abc123",
@@ -124,7 +125,7 @@ func TestDiff(t *testing.T) {
 			want: Section{Ecosystem: lockfile.Composer},
 		},
 		{
-			name: "ordering: added, updated, removed each alphabetical, out-of-order input",
+			name: "ordering: alphabetical across every change type, out-of-order input",
 			base: lockfile.Lock{
 				Packages: []lockfile.Package{
 					{Name: "zzz/removed-one", Version: "1.0.0"},
@@ -144,11 +145,11 @@ func TestDiff(t *testing.T) {
 			want: Section{
 				Ecosystem: lockfile.Composer,
 				Production: []Change{
+					{Name: "aaa/removed-two", Type: Removed, FromVersion: "1.0.0"},
+					{Name: "bbb/updated-two", Type: Updated, Direction: Upgrade, FromVersion: "1.0.0", ToVersion: "2.0.0"},
 					{Name: "ccc/added-one", Type: Added, ToVersion: "1.0.0"},
 					{Name: "mmm/added-two", Type: Added, ToVersion: "1.0.0"},
-					{Name: "bbb/updated-two", Type: Updated, FromVersion: "1.0.0", ToVersion: "2.0.0"},
-					{Name: "yyy/updated-one", Type: Updated, FromVersion: "1.0.0", ToVersion: "2.0.0"},
-					{Name: "aaa/removed-two", Type: Removed, FromVersion: "1.0.0"},
+					{Name: "yyy/updated-one", Type: Updated, Direction: Upgrade, FromVersion: "1.0.0", ToVersion: "2.0.0"},
 					{Name: "zzz/removed-one", Type: Removed, FromVersion: "1.0.0"},
 				},
 			},
@@ -183,7 +184,7 @@ func TestDiff(t *testing.T) {
 			want: Section{
 				Ecosystem: lockfile.Composer,
 				Production: []Change{
-					{Name: "acme/foo", Type: Updated, FromVersion: "1.0.0", ToVersion: "1.1.0", SourceURL: "https://example.com/acme/foo"},
+					{Name: "acme/foo", Type: Updated, Direction: Upgrade, FromVersion: "1.0.0", ToVersion: "1.1.0", SourceURL: "https://example.com/acme/foo"},
 				},
 			},
 		},
@@ -209,7 +210,7 @@ func TestDiff(t *testing.T) {
 			want: Section{
 				Ecosystem: lockfile.Composer,
 				Production: []Change{
-					{Name: "acme/foo", Type: Updated, FromVersion: "1.0.0", ToVersion: "2.0.0"},
+					{Name: "acme/foo", Type: Updated, Direction: Upgrade, FromVersion: "1.0.0", ToVersion: "2.0.0"},
 				},
 				Development: []Change{
 					{Name: "acme/new-dev-tool", Type: Added, ToVersion: "1.0.0"},
@@ -389,4 +390,104 @@ func changesEqual(a, b []Change) bool {
 	}
 
 	return true
+}
+
+// TestDiff_Direction covers the direction reported on Updated changes, which
+// is what lets the report distinguish an upgrade from a downgrade instead of
+// showing every update alike.
+func TestDiff_Direction(t *testing.T) {
+	tests := []struct {
+		name        string
+		fromVersion string
+		toVersion   string
+		want        Direction
+	}{
+		{
+			name:        "higher version is an upgrade",
+			fromVersion: "1.0.0",
+			toVersion:   "1.1.0",
+			want:        Upgrade,
+		},
+		{
+			name:        "lower version is a downgrade",
+			fromVersion: "2.1.0",
+			toVersion:   "2.0.0",
+			want:        Downgrade,
+		},
+		{
+			name:        "major downgrade",
+			fromVersion: "3.0.0",
+			toVersion:   "2.9.9",
+			want:        Downgrade,
+		},
+		{
+			name:        "Composer v prefix does not defeat comparison",
+			fromVersion: "v6.4.2",
+			toVersion:   "v6.4.3",
+			want:        Upgrade,
+		},
+		{
+			name:        "leaving a pre-release for its release is an upgrade",
+			fromVersion: "1.0.0-rc.1",
+			toVersion:   "1.0.0",
+			want:        Upgrade,
+		},
+		{
+			name:        "dev branch alias has no reportable direction",
+			fromVersion: "dev-main",
+			toVersion:   "dev-main",
+			want:        DirectionUnknown,
+		},
+		{
+			name:        "moving off a dev branch alias has no reportable direction",
+			fromVersion: "dev-main",
+			toVersion:   "1.0.0",
+			want:        DirectionUnknown,
+		},
+		{
+			name:        "equal versions differing only by build metadata have no direction",
+			fromVersion: "1.0.0+build1",
+			toVersion:   "1.0.0+build2",
+			want:        DirectionUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := lockfile.Lock{
+				Packages: []lockfile.Package{{Name: "acme/foo", Version: tt.fromVersion, Reference: "abc123"}},
+			}
+			head := lockfile.Lock{
+				Packages: []lockfile.Package{{Name: "acme/foo", Version: tt.toVersion, Reference: "def456"}},
+			}
+
+			got := Diff(lockfile.Composer, base, head)
+
+			if len(got.Production) != 1 {
+				t.Fatalf("Diff() produced %d production changes, want exactly 1", len(got.Production))
+			}
+
+			if got.Production[0].Direction != tt.want {
+				t.Errorf("Diff() direction for %q -> %q = %v, want %v", tt.fromVersion, tt.toVersion, got.Production[0].Direction, tt.want)
+			}
+		})
+	}
+}
+
+// TestDiff_DirectionOnlyOnUpdates guards the invariant documented on Change:
+// additions and removals never carry a direction, since there is no pair of
+// versions to order.
+func TestDiff_DirectionOnlyOnUpdates(t *testing.T) {
+	base := lockfile.Lock{
+		Packages: []lockfile.Package{{Name: "acme/gone", Version: "1.0.0"}},
+	}
+	head := lockfile.Lock{
+		Packages: []lockfile.Package{{Name: "acme/new", Version: "2.0.0"}},
+	}
+
+	for _, c := range Diff(lockfile.Composer, base, head).Production {
+		if c.Direction != DirectionUnknown {
+			t.Errorf("change %q of type %v carries direction %v, want DirectionUnknown", c.Name, c.Type, c.Direction)
+		}
+	}
 }

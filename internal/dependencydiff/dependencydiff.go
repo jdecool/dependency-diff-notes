@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
+	"github.com/jdecool/dependency-diff-notes/internal/semver"
 )
 
 // ChangeType classifies how a package changed between the base and head Lock.
@@ -19,15 +20,31 @@ const (
 	Removed
 )
 
+// Direction refines a Change of type Updated with the direction the version
+// moved in, when the two version labels can be ordered at all.
+type Direction int
+
+const (
+	// DirectionUnknown means no direction is reported: either the Change is
+	// not an Updated one, or at least one of its version labels is not a
+	// version this project can order (a Composer dev-* alias, a git
+	// dependency, pnpm's workspace:*), or it is a Reference Change (see
+	// CONTEXT.md) where the version label did not move at all.
+	DirectionUnknown Direction = iota
+	Upgrade
+	Downgrade
+)
+
 // Change describes one package's change between the base and head Lock.
 type Change struct {
 	Name          string
 	Type          ChangeType
-	FromVersion   string // empty when Type == Added
-	ToVersion     string // empty when Type == Removed
-	FromReference string // empty when Type == Added, or when the package has no source.reference
-	ToReference   string // empty when Type == Removed, or when the package has no source.reference
-	SourceURL     string // best-effort browsable link to the package's repository; may be empty
+	Direction     Direction // always DirectionUnknown unless Type == Updated
+	FromVersion   string    // empty when Type == Added
+	ToVersion     string    // empty when Type == Removed
+	FromReference string    // empty when Type == Added, or when the package has no source.reference
+	ToReference   string    // empty when Type == Removed, or when the package has no source.reference
+	SourceURL     string    // best-effort browsable link to the package's repository; may be empty
 }
 
 // Section is one Ecosystem's slice of a Dependency Report (see CONTEXT.md):
@@ -105,6 +122,13 @@ func allPackages(l lockfile.Lock) []lockfile.Package {
 
 // diffPackages computes the Dependency Changes for a single section (either
 // production or development packages), independently of the other section.
+//
+// The result is sorted alphabetically by package name across every change
+// type, not grouped by type: the rendered report carries the type in a column
+// of its own, so a reader looks a package up by name rather than by what
+// happened to it. No secondary sort key on ChangeType is applied, because it
+// could never break a tie — packages are indexed by name on both sides, so one
+// package yields at most one Change and no two entries here share a name.
 func diffPackages(base, head []lockfile.Package) []Change {
 	baseByName := indexByName(base)
 	headByName := indexByName(head)
@@ -133,6 +157,7 @@ func diffPackages(base, head []lockfile.Package) []Change {
 			updated = append(updated, Change{
 				Name:          name,
 				Type:          Updated,
+				Direction:     direction(basePkg.Version, headPkg.Version),
 				FromVersion:   basePkg.Version,
 				ToVersion:     headPkg.Version,
 				FromReference: basePkg.Reference,
@@ -154,10 +179,6 @@ func diffPackages(base, head []lockfile.Package) []Change {
 		}
 	}
 
-	sortByName(added)
-	sortByName(updated)
-	sortByName(removed)
-
 	if len(added) == 0 && len(updated) == 0 && len(removed) == 0 {
 		return nil
 	}
@@ -167,7 +188,30 @@ func diffPackages(base, head []lockfile.Package) []Change {
 	changes = append(changes, updated...)
 	changes = append(changes, removed...)
 
+	sortByName(changes)
+
 	return changes
+}
+
+// direction reports which way a package's version moved, for a Change already
+// known to be an update. It is DirectionUnknown whenever the two labels cannot
+// be ordered, and equally when they compare equal — the latter being the
+// Reference Change case (see CONTEXT.md), where only the resolved commit moved
+// and there is no direction to report.
+func direction(fromVersion, toVersion string) Direction {
+	cmp, ok := semver.Compare(fromVersion, toVersion)
+	if !ok {
+		return DirectionUnknown
+	}
+
+	switch {
+	case cmp < 0:
+		return Upgrade
+	case cmp > 0:
+		return Downgrade
+	default:
+		return DirectionUnknown
+	}
 }
 
 // indexByName builds a lookup of packages by name.
