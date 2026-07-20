@@ -7,6 +7,48 @@ It inspects a project's dependency state, determines what changed, and posts a c
 
 > **Supported ecosystems:** Composer (PHP), reading from `composer.lock`; npm (JavaScript), reading from `package-lock.json`; pnpm (JavaScript), reading from `pnpm-lock.yaml`; and Yarn (JavaScript), reading from `yarn.lock`. A project using more than one at once (e.g. a Composer backend and an npm frontend in the same repository) gets a single Bot Comment with one section per Ecosystem — but a project with more than one JavaScript package manager's Lockfile present at once (e.g. both `package-lock.json` and `pnpm-lock.yaml`) is treated as a conflict and fails the run, since a project uses at most one at a time — unless you tell the bot which one is real with `--ecosystems` (see Configuration below).
 
+## What the comment looks like
+
+Each Ecosystem gets its own heading, followed by a collapsible section holding one table per dependency group.
+Ecosystems and their production dependencies are expanded by default; development dependencies are collapsed, since they are usually the larger and less scrutinized half of a Change Request.
+The summary line at the top appears only when more than one Ecosystem changed, and links to each section.
+
+````markdown
+## Dependency changes
+
+[Composer](#composer) 3 · [npm](#npm) 1
+
+### Composer
+
+<details open>
+<summary><strong>3 changes</strong></summary>
+
+<details open>
+<summary>Production dependencies (2)</summary>
+
+| Package | Change | Version |
+|---|---|---|
+| [symfony/console](https://github.com/symfony/console) | ⬆️ Upgraded | v6.4.2 → v6.4.3 |
+| [acme/legacy](https://github.com/acme/legacy) | ⬇️ Downgraded | 2.1.0 → 2.0.0 |
+
+</details>
+
+<details>
+<summary>Development dependencies (1)</summary>
+
+| Package | Change | Version |
+|---|---|---|
+| [phpunit/phpunit](https://github.com/sebastianbergmann/phpunit) | ➕ Added | 10.5.9 |
+
+</details>
+
+</details>
+````
+
+The `Change` column reports the direction of an update whenever the two versions can be ordered as Semantic Versioning.
+When they cannot — a Composer `dev-*` alias, a git dependency, pnpm's `workspace:*` — or when only the resolved commit moved while the version label stayed put, the change is reported as `🔄 Changed` rather than being guessed at as an upgrade.
+Packages are sorted alphabetically by name, across every kind of change: the `Change` column already says what happened, so the ordering is there to help you find a package.
+
 ## Installation
 
 ```bash
@@ -64,6 +106,22 @@ dependency-diff-notes --target-branch main --source HEAD
 # Compare a specific commit or tag against another branch:
 dependency-diff-notes --target-branch develop --source v1.4.0
 ```
+
+Output is plain text rather than Markdown - neither tables nor collapsible sections mean anything on a terminal - but it reports the same information, with one marker per change:
+
+```
+Dependency changes
+
+Composer
+  Production dependencies
+    + acme/new  1.2.0
+    ↑ symfony/console  v6.4.2 -> v6.4.3
+    ↓ acme/legacy  2.1.0 -> 2.0.0
+    ~ acme/dev-lib  dev-main (abc1234) -> dev-main (def5678)
+    - acme/gone  0.9.0
+```
+
+`+` added, `-` removed, `↑` upgraded, `↓` downgraded, and `~` for an update whose direction cannot be determined - the same rule the comment's `🔄 Changed` follows.
 
 The comparison uses the same merge-base semantics as CI, so the output is a faithful preview of the comment the bot would post on a Change Request.
 Two things differ from CI: `--target-branch` is used **literally** (a local branch, tag, or SHA - it is not resolved through `origin/`, so no `git fetch` is required), and the `--source` (the new side) defaults to the on-disk working tree, including uncommitted changes.

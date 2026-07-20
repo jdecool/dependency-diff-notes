@@ -58,7 +58,15 @@ The concept applies uniformly across every Ecosystem, but is only actually imple
 _Avoid_: commit change
 
 **Dependency Report**:
-The structured content the bot posts: one section per active Ecosystem, each broken down into Production / Development dependencies (or a single undifferentiated Dependencies group — see below), each in turn grouped into Added / Updated / Removed, sorted alphabetically within each group.
+The structured content the bot posts: one section per active Ecosystem, each broken down into Production / Development dependencies (or a single undifferentiated Dependencies group — see below), each listing its Dependency Changes sorted alphabetically by package name.
+The sort is a single alphabetical ordering across every kind of change, not a grouping by kind: the rendered table states what happened to each package in a column of its own, so a reader looks a package up by name rather than by what happened to it.
+
+**Change Direction**:
+Which way a package's version moved in an update, reported as an upgrade or a downgrade.
+It refines a Dependency Change of type Updated and exists only for presentation — it is not a fourth kind of change alongside addition, removal, and update.
+A direction is reported only when both version labels can actually be ordered as Semantic Versioning, which excludes Composer `dev-*` aliases, `1.0.x-dev` suffixes, git dependencies, and pnpm's `workspace:*`; and it is equally absent from a Reference Change, where the version label is identical on both sides and only the resolved commit moved.
+In all those cases the bot reports an undifferentiated change rather than guessing a direction (see `docs/adr/0007-semver-comparison-dependency.md`).
+_Avoid_: bump, version delta
 
 **Production dependencies** / **Development dependencies**:
 Within an Ecosystem's section of a Dependency Report, the two groups most Ecosystems' Lockfiles distinguish (Composer's `packages`/`packages-dev`; npm's and pnpm's per-package `dev` flag).
