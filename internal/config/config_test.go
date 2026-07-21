@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jdecool/dependency-diff-notes/internal/report"
+
 	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
 )
 
@@ -23,6 +25,7 @@ var allEnvVars = []string{
 	"DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH",
 	"DEPENDENCY_DIFF_NOTES_ECOSYSTEMS",
 	"DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION",
+	"DEPENDENCY_DIFF_NOTES_REPORT_FOLD",
 	"GITHUB_REPOSITORY",
 	"GITHUB_REF",
 	"GITHUB_BASE_REF",
@@ -554,6 +557,89 @@ func TestLoad_ReportDestination(t *testing.T) {
 			}
 			if got.ReportDestination != tt.want {
 				t.Errorf("ReportDestination = %v, want %v", got.ReportDestination, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_ReportFold(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		env     map[string]string
+		want    report.Fold
+		wantErr string // non-empty substring expected in the error, "" means no error
+	}{
+		{
+			name: "unset folds at development dependencies",
+			args: []string{},
+			want: report.FoldDevelopment,
+		},
+		{
+			name: "flag folds at the ecosystem",
+			args: []string{"--report-fold", "ecosystem"},
+			want: report.FoldEcosystem,
+		},
+		{
+			name: "flag disables folding",
+			args: []string{"--report-fold", "none"},
+			want: report.FoldNone,
+		},
+		{
+			name: "flag selects the default explicitly",
+			args: []string{"--report-fold", "development"},
+			want: report.FoldDevelopment,
+		},
+		{
+			name: "case-insensitive with surrounding whitespace",
+			args: []string{"--report-fold", "  Ecosystem "},
+			want: report.FoldEcosystem,
+		},
+		{
+			name: "env var is honored when the flag is absent",
+			args: []string{},
+			env:  map[string]string{"DEPENDENCY_DIFF_NOTES_REPORT_FOLD": "none"},
+			want: report.FoldNone,
+		},
+		{
+			name: "flag overrides env",
+			args: []string{"--report-fold", "development"},
+			env:  map[string]string{"DEPENDENCY_DIFF_NOTES_REPORT_FOLD": "none"},
+			want: report.FoldDevelopment,
+		},
+		{
+			// Fails fast for the same reason an unknown destination does: a
+			// silent fallback to the default would leave an operator believing
+			// their report renders in a shape it does not.
+			name:    "unknown fold is a fail-fast error",
+			args:    []string{"--report-fold", "collapsed"},
+			wantErr: "unknown fold",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range allEnvVars {
+				t.Setenv(name, tt.env[name])
+			}
+
+			got, err := Load(tt.args)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want error containing %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %q, want it to contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			if got.ReportFold != tt.want {
+				t.Errorf("ReportFold = %v, want %v", got.ReportFold, tt.want)
 			}
 		})
 	}

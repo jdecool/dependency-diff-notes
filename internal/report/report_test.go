@@ -223,7 +223,7 @@ func TestRender_ExactBody(t *testing.T) {
 			// invariant once instead of repeating it in each want.
 			want := tt.want + report.EndMarker + "\n"
 
-			got := report.Render(tt.in)
+			got := report.Render(tt.in, report.FoldDevelopment)
 			if got != want {
 				t.Errorf("Render() =\n%q\nwant\n%q", got, want)
 			}
@@ -332,7 +332,7 @@ func TestRender_Structural(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := report.Render(tt.in)
+			got := report.Render(tt.in, report.FoldDevelopment)
 
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
@@ -361,7 +361,7 @@ func TestRender_TableSeparatedFromSummary(t *testing.T) {
 				Development: []dependencydiff.Change{{Name: "acme/bar", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
 			},
 		},
-	})
+	}, report.FoldDevelopment)
 
 	if strings.Contains(got, "</summary>\n|") {
 		t.Errorf("Render() puts a table directly after a </summary> without a blank line:\n%s", got)
@@ -372,6 +372,129 @@ func TestRender_TableSeparatedFromSummary(t *testing.T) {
 	}
 }
 
+// TestRender_Fold pins the Report Fold matrix (see CONTEXT.md) by reading the
+// <details> tags in document order: the Ecosystem section first, then its
+// groups. Asserting the whole sequence rather than one tag at a time is what
+// catches a fold that shuts the right level but disturbs another.
+func TestRender_Fold(t *testing.T) {
+	in := dependencydiff.Report{
+		Sections: []dependencydiff.Section{
+			{
+				Ecosystem:   lockfile.Composer,
+				Production:  []dependencydiff.Change{{Name: "acme/foo", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
+				Development: []dependencydiff.Change{{Name: "acme/bar", Type: dependencydiff.Added, ToVersion: "1.0.0"}},
+			},
+		},
+	}
+
+	tests := []struct {
+		name string
+		fold report.Fold
+		want []string // <details> tags, in document order
+	}{
+		{
+			name: "development is the default, and the zero value",
+			fold: report.FoldDevelopment,
+			want: []string{"<details open>", "<details open>", "<details>"},
+		},
+		{
+			name: "ecosystem shuts the section but leaves its groups open inside",
+			fold: report.FoldEcosystem,
+			want: []string{"<details>", "<details open>", "<details open>"},
+		},
+		{
+			name: "none opens everything",
+			fold: report.FoldNone,
+			want: []string{"<details open>", "<details open>", "<details open>"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detailsTags(report.Render(in, tt.fold))
+
+			if len(got) != len(tt.want) {
+				t.Fatalf("Render() produced %d <details> tags (%v), want %d (%v)", len(got), got, len(tt.want), tt.want)
+			}
+
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("Render() <details> tag %d = %q, want %q (full sequence %v)", i, got[i], tt.want[i], got)
+				}
+			}
+		})
+	}
+}
+
+// TestRender_FoldCombinedGroup covers the grouping Yarn and pnpm 9 produce,
+// where a single undifferentiated Dependencies group replaces the
+// production/development split: it has no development half to fold, so only
+// the Ecosystem level can move.
+func TestRender_FoldCombinedGroup(t *testing.T) {
+	in := dependencydiff.Report{
+		Sections: []dependencydiff.Section{
+			{
+				Ecosystem: lockfile.Yarn,
+				Combined:  []dependencydiff.Change{{Name: "lodash", Type: dependencydiff.Added, ToVersion: "4.17.21"}},
+			},
+		},
+	}
+
+	tests := []struct {
+		name string
+		fold report.Fold
+		want []string
+	}{
+		{name: "development", fold: report.FoldDevelopment, want: []string{"<details open>", "<details open>"}},
+		{name: "ecosystem", fold: report.FoldEcosystem, want: []string{"<details>", "<details open>"}},
+		{name: "none", fold: report.FoldNone, want: []string{"<details open>", "<details open>"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detailsTags(report.Render(in, tt.fold))
+
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("Render() <details> sequence = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFoldString checks a Fold spells itself the way an operator types it, so
+// flag descriptions and error messages stay in the operator's vocabulary.
+func TestFoldString(t *testing.T) {
+	tests := []struct {
+		fold report.Fold
+		want string
+	}{
+		{report.FoldDevelopment, "development"},
+		{report.FoldEcosystem, "ecosystem"},
+		{report.FoldNone, "none"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := tt.fold.String(); got != tt.want {
+				t.Errorf("Fold.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// detailsTags returns every <details> opening tag in body, in document order.
+func detailsTags(body string) []string {
+	var tags []string
+
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "<details") {
+			tags = append(tags, line)
+		}
+	}
+
+	return tags
+}
+
 func TestHasMarker(t *testing.T) {
 	tests := []struct {
 		name string
@@ -380,7 +503,7 @@ func TestHasMarker(t *testing.T) {
 	}{
 		{
 			name: "body rendered by Render",
-			body: report.Render(dependencydiff.Report{}),
+			body: report.Render(dependencydiff.Report{}, report.FoldDevelopment),
 			want: true,
 		},
 		{

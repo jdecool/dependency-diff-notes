@@ -44,6 +44,57 @@ var ErrUnterminatedRegion = errors.New("description contains the opening marker 
 // hash) are shown, mirroring the short hash format Git itself uses.
 const shortRefLength = 7
 
+// Fold is the Report Fold (see CONTEXT.md): the outermost level of a rendered
+// Dependency Report that starts collapsed.
+//
+// Its three values are not independent presets but three positions on one
+// axis, ordered from the innermost fold outwards — which is why widening this
+// into a set of per-level booleans would be a step backwards: the levels are
+// nested, so only their outermost shut one is ever visible to a reader, and
+// naming that one level says everything the other flags could.
+type Fold int
+
+const (
+	// FoldDevelopment folds at Development dependencies, leaving Ecosystem
+	// sections and production tables open. It is the default, and first here
+	// so that the zero value is the historical behavior.
+	FoldDevelopment Fold = iota
+	// FoldEcosystem folds at the Ecosystem section.
+	FoldEcosystem
+	// FoldNone folds nowhere: every table is open on arrival.
+	FoldNone
+)
+
+// String returns the fold's CLI spelling, so error messages and flag
+// descriptions use the same word an operator types.
+func (f Fold) String() string {
+	switch f {
+	case FoldEcosystem:
+		return "ecosystem"
+	case FoldNone:
+		return "none"
+	default:
+		return "development"
+	}
+}
+
+// ecosystemOpen reports whether an Ecosystem section starts expanded.
+func (f Fold) ecosystemOpen() bool {
+	return f != FoldEcosystem
+}
+
+// developmentOpen reports whether a Development dependencies group starts
+// expanded.
+//
+// FoldEcosystem opens it deliberately: the section enclosing it is shut, so
+// the group's own state is invisible until a reader expands that section, and
+// at that moment they have asked to see the section — showing them a second
+// layer of shut headers would charge a click for the counts they can already
+// read in the section summary.
+func (f Fold) developmentOpen() bool {
+	return f != FoldDevelopment
+}
+
 // Render renders r into the full Markdown body published at either Report
 // Destination (see CONTEXT.md), delimited by Marker and EndMarker. The body is
 // identical for both: the content is the same and both Forges render it with
@@ -59,10 +110,11 @@ const shortRefLength = 7
 // them). Keeping it outside also leaves the Ecosystem name visible when its
 // section is collapsed.
 //
-// Ecosystems and their production dependencies are expanded by default;
-// development dependencies are collapsed, since they are the larger and less
+// What starts collapsed is fold's to decide (see Fold). The default,
+// FoldDevelopment, expands Ecosystems and their production dependencies and
+// collapses development dependencies, since those are the larger and less
 // scrutinized half of a typical Change Request.
-func Render(r dependencydiff.Report) string {
+func Render(r dependencydiff.Report, fold Fold) string {
 	var b strings.Builder
 
 	b.WriteString(Marker)
@@ -80,7 +132,7 @@ func Render(r dependencydiff.Report) string {
 
 	for _, s := range sections {
 		fmt.Fprintf(&b, "\n### %s\n", s.Ecosystem)
-		fmt.Fprintf(&b, "\n<details open>\n<summary><strong>%s</strong></summary>\n", changeCount(sectionTotal(s)))
+		fmt.Fprintf(&b, "\n<details%s>\n<summary><strong>%s</strong></summary>\n", openAttr(fold.ecosystemOpen()), changeCount(sectionTotal(s)))
 
 		if len(s.Combined) > 0 {
 			writeGroup(&b, "Dependencies", s.Combined, true)
@@ -90,7 +142,7 @@ func Render(r dependencydiff.Report) string {
 			}
 
 			if len(s.Development) > 0 {
-				writeGroup(&b, "Development dependencies", s.Development, false)
+				writeGroup(&b, "Development dependencies", s.Development, fold.developmentOpen())
 			}
 		}
 
@@ -249,16 +301,20 @@ func changeCount(n int) string {
 	return fmt.Sprintf("%d changes", n)
 }
 
+// openAttr renders the <details> attribute expanding a section on arrival.
+func openAttr(open bool) string {
+	if open {
+		return " open"
+	}
+
+	return ""
+}
+
 // writeGroup renders one group of a Section as a collapsible table. A blank
 // line after the <summary> is required: without it neither Forge parses the
 // Markdown table nested inside the HTML block.
 func writeGroup(b *strings.Builder, title string, changes []dependencydiff.Change, open bool) {
-	openAttr := ""
-	if open {
-		openAttr = " open"
-	}
-
-	fmt.Fprintf(b, "\n<details%s>\n<summary>%s (%d)</summary>\n\n", openAttr, title, len(changes))
+	fmt.Fprintf(b, "\n<details%s>\n<summary>%s (%d)</summary>\n\n", openAttr(open), title, len(changes))
 
 	b.WriteString("| Package | Change | Version |\n")
 	b.WriteString("|---|---|---|\n")
@@ -327,6 +383,11 @@ func escapeCell(s string) string {
 // it carries no hidden marker and no Markdown — neither tables nor collapsible
 // sections mean anything on a terminal — but it reports the same information,
 // so a Local Comparison stays a faithful preview of the Bot Comment.
+//
+// It takes no Fold, and honoring one would be a mistake: a terminal has
+// nothing to click, so folding content there would mean withholding it, which
+// turns a presentation setting into a content filter and defeats the purpose
+// of previewing a Change Request before opening it.
 func RenderText(r dependencydiff.Report) string {
 	var b strings.Builder
 
