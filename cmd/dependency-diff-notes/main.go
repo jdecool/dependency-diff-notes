@@ -325,7 +325,7 @@ func newForgeClient(cfg config.Config) forge.Client {
 // docs/adr/0008-report-destination.md).
 func publishReport(ctx context.Context, cfg config.Config, diff dependencydiff.Report, out io.Writer) error {
 	client := newForgeClient(cfg)
-	body := report.Render(diff)
+	body := report.Render(diff, cfg.ReportFold)
 
 	comments, err := client.ListComments(ctx)
 	if err != nil {

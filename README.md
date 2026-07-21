@@ -10,7 +10,8 @@ It inspects a project's dependency state, determines what changed, and posts a c
 ## What the comment looks like
 
 Each Ecosystem gets its own heading, followed by a collapsible section holding one table per dependency group.
-Ecosystems and their production dependencies are expanded by default; development dependencies are collapsed, since they are usually the larger and less scrutinized half of a Change Request.
+By default, Ecosystems and their production dependencies are expanded; development dependencies are collapsed, since they are usually the larger and less scrutinized half of a Change Request.
+On a repository whose reports run long you can fold one level further out with `--report-fold` (see [How much of the report starts collapsed](#how-much-of-the-report-starts-collapsed)).
 The summary line at the top appears only when more than one Ecosystem changed, and links to each section.
 
 ````markdown
@@ -145,6 +146,7 @@ Configuration is resolved from CLI flags first, then from the matching environme
 | `--yarn-lock-path`     | Path to `yarn.lock`               | `DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH`     | `DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH` | `yarn.lock` |
 | `--ecosystems`         | Comma-separated Ecosystems to consider, e.g. `composer,pnpm` | `DEPENDENCY_DIFF_NOTES_ECOSYSTEMS` | `DEPENDENCY_DIFF_NOTES_ECOSYSTEMS` | all present |
 | `--report-destination` | Where to publish the report: `comment` or `description` | `DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION` | `DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION` | `comment` |
+| `--report-fold`        | Outermost report level that starts collapsed: `development`, `ecosystem` or `none` | `DEPENDENCY_DIFF_NOTES_REPORT_FOLD` | `DEPENDENCY_DIFF_NOTES_REPORT_FOLD` | `development` |
 | `--repo-dir`           | Path to the repository checkout   | none                                      | none                           | `.` |
 
 `--server-url` (GitLab only), `--project-id`, `--target-branch`, and `--token` are only required once the bot detects it's running in a Change Request context (i.e. `--request-iid` resolves to a non-empty value, from the flag, `CI_MERGE_REQUEST_IID`, or `GITHUB_REF`).
@@ -155,6 +157,28 @@ For a [local comparison](#local-comparison) (no Change Request context) only `--
 Left unset, every Ecosystem is considered — the historical behavior.
 Its main use is resolving the JavaScript Lockfile conflict above: on a project that carries both `package-lock.json` and `pnpm-lock.yaml`, set `--ecosystems=composer,pnpm` (or just `pnpm`) to tell the bot which JavaScript package manager is real, and the stray Lockfile is ignored for the whole run.
 The restriction is permanent, not consulted only on conflict, so an excluded Ecosystem is dropped at every ref (see `docs/adr/0005-ecosystem-allowlist.md`).
+
+### How much of the report starts collapsed
+
+`--report-fold` names the outermost level of the report that starts collapsed.
+The three values are positions on a single axis, from the innermost fold outwards:
+
+| `--report-fold` | Ecosystem section | Production / Dependencies | Development dependencies |
+|---|---|---|---|
+| `development` (default) | expanded | expanded | collapsed |
+| `ecosystem`     | collapsed | expanded | expanded |
+| `none`          | expanded | expanded | expanded |
+
+```bash
+dependency-diff-notes --report-fold ecosystem
+```
+
+`ecosystem` is the one to reach for on a monorepo where several Ecosystems change at once and the report crowds out everything else on the page: each section shrinks to its heading and a change count, and one click restores it.
+Note that it leaves the groups *inside* a section expanded - since the section around them is shut, their own state is invisible until a reader opens it, and at that point they have asked to see the section, so a second layer of collapsed headers would only charge them another click.
+
+`none` expands everything, including development dependencies.
+
+This is a presentation setting only: it never changes which dependency changes the report contains, it is the same at both report destinations, and it has no effect on a [local comparison](#local-comparison), whose terminal output has nothing to click and always prints in full.
 
 ### Reporting in the Change Request description
 

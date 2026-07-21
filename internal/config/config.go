@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jdecool/dependency-diff-notes/internal/lockfile"
+	"github.com/jdecool/dependency-diff-notes/internal/report"
 )
 
 // Forge identifies which code-hosting platform (see CONTEXT.md) the bot is
@@ -71,6 +72,24 @@ func parseReportDestination(raw string) (ReportDestination, error) {
 	}
 }
 
+// parseReportFold parses the --report-fold value into the Report Fold the
+// report package renders with (see CONTEXT.md: Report Fold). Empty means the
+// default, folding at Development dependencies; anything unrecognized is a
+// hard error, for the same reason an unknown destination is — an operator
+// finds out immediately rather than silently getting the default.
+func parseReportFold(raw string) (report.Fold, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "development":
+		return report.FoldDevelopment, nil
+	case "ecosystem":
+		return report.FoldEcosystem, nil
+	case "none":
+		return report.FoldNone, nil
+	default:
+		return 0, fmt.Errorf("report-fold: unknown fold %q (want \"development\", \"ecosystem\" or \"none\")", raw)
+	}
+}
+
 // Config holds everything the bot needs to run for one invocation.
 type Config struct {
 	Forge Forge
@@ -93,6 +112,12 @@ type Config struct {
 	// effect on a Local Comparison, which prints to the terminal and
 	// publishes nothing.
 	ReportDestination ReportDestination
+
+	// ReportFold is the outermost level of the Dependency Report that starts
+	// collapsed (see CONTEXT.md: Report Fold). It is presentation only, and
+	// like ReportDestination it has no effect on a Local Comparison, whose
+	// terminal output always prints in full.
+	ReportFold report.Fold
 
 	// ConsideredEcosystems is the operator-declared allowlist of Ecosystems the
 	// bot is permitted to examine for this run (see CONTEXT.md: Considered
@@ -163,6 +188,7 @@ func Load(args []string) (Config, error) {
 	repoDir := fs.String("repo-dir", "", "Path to the repository checkout (default: \".\")")
 	ecosystems := fs.String("ecosystems", "", "Comma-separated Ecosystems to consider, e.g. \"composer,pnpm\" (default: $DEPENDENCY_DIFF_NOTES_ECOSYSTEMS, or all present)")
 	reportDestination := fs.String("report-destination", "", "Where to publish the report: \"comment\" or \"description\" (default: $DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION, or \"comment\"); ignored outside a Change Request")
+	reportFold := fs.String("report-fold", "", "Outermost report level that starts collapsed: \"development\", \"ecosystem\" or \"none\" (default: $DEPENDENCY_DIFF_NOTES_REPORT_FOLD, or \"development\"); ignored outside a Change Request")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
@@ -180,9 +206,15 @@ func Load(args []string) (Config, error) {
 		return Config{}, err
 	}
 
+	fold, err := parseReportFold(resolve(*reportFold, "DEPENDENCY_DIFF_NOTES_REPORT_FOLD", ""))
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Forge:                forge,
 		ReportDestination:    destination,
+		ReportFold:           fold,
 		ComposerLockPath:     resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
 		NPMLockPath:          resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
 		PnpmLockPath:         resolve(*pnpmLockPath, "DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH", defaultPnpmLockPath),

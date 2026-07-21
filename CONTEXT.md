@@ -81,6 +81,14 @@ Exactly one is in effect for a run, as declared by the operator; the two are nev
 The bot maintains the report at the destination in effect and removes it from the other one, so a Change Request never carries two reports that can drift apart (see `docs/adr/0008-report-destination.md`).
 _Avoid_: report target ("target" already names the branch a Change Request merges into), output mode
 
+**Report Fold**:
+The outermost level of a Dependency Report that starts collapsed when a reader first sees it, as declared by the operator.
+Three positions on one axis, from innermost outwards: Development dependencies (the default), the Ecosystem section, or no fold at all.
+Folding at the Ecosystem level shuts each section but leaves its groups open inside, so one click restores the whole section rather than revealing a second layer of shut headers.
+It is presentation only: it never changes which Dependency Changes a report contains, and has no effect on a Local Comparison, whose terminal output has nothing to click and always prints in full.
+It does not vary by Report Destination either - the same body is published wherever the report lands, which is what keeps a Local Comparison a faithful preview of it.
+_Avoid_: collapse level, expansion mode
+
 **Bot Comment**:
 One of the two Report Destinations, and the default: the single comment the bot maintains on a Change Request, identified by a hidden marker and updated in place on every pipeline run instead of being duplicated.
 Implemented as a plain GitLab Note (never a resolvable Discussion) or a GitHub issue comment, depending on the Forge.
