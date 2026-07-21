@@ -256,3 +256,201 @@ func TestNewClient_DefaultHTTPClient(t *testing.T) {
 		t.Errorf("baseURL = %q, want trailing slash trimmed", c.baseURL)
 	}
 }
+
+func TestDeleteComment(t *testing.T) {
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					t.Errorf("method = %s, want DELETE", r.Method)
+				}
+				if want := "/api/v4/projects/group%2Fproject/merge_requests/42/notes/9"; r.URL.EscapedPath() != want {
+					t.Errorf("path = %s, want %s", r.URL.EscapedPath(), want)
+				}
+				if got := r.Header.Get("PRIVATE-TOKEN"); got != testToken {
+					t.Errorf("PRIVATE-TOKEN = %q, want %q", got, testToken)
+				}
+
+				w.WriteHeader(http.StatusNoContent)
+			},
+		},
+		{
+			name: "forbidden",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"403 Forbidden"}`))
+			},
+			wantErr:    true,
+			wantErrSub: "403",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			client := NewClient(server.URL, testToken, testProjectID, testMRIID, nil)
+			err := client.DeleteComment(context.Background(), 9)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("DeleteComment() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("DeleteComment() error = %q, want substring %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("DeleteComment() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDescription(t *testing.T) {
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		want       string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("method = %s, want GET", r.Method)
+				}
+				// The description lives on the merge request resource, not
+				// under /notes.
+				if want := "/api/v4/projects/group%2Fproject/merge_requests/42"; r.URL.EscapedPath() != want {
+					t.Errorf("path = %s, want %s", r.URL.EscapedPath(), want)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"iid":42,"description":"Closes #12."}`))
+			},
+			want: "Closes #12.",
+		},
+		{
+			name: "empty description decodes to the empty string",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"iid":42,"description":null}`))
+			},
+			want: "",
+		},
+		{
+			name: "not found",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"404 Not found"}`))
+			},
+			wantErr:    true,
+			wantErrSub: "404",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			client := NewClient(server.URL, testToken, testProjectID, testMRIID, nil)
+			got, err := client.Description(context.Background())
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Description() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("Description() error = %q, want substring %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Description() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Description() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateDescription(t *testing.T) {
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut {
+					t.Errorf("method = %s, want PUT", r.Method)
+				}
+				if want := "/api/v4/projects/group%2Fproject/merge_requests/42"; r.URL.EscapedPath() != want {
+					t.Errorf("path = %s, want %s", r.URL.EscapedPath(), want)
+				}
+				if got := r.Header.Get("Content-Type"); got != "application/json" {
+					t.Errorf("Content-Type = %q, want application/json", got)
+				}
+
+				var payload mergeRequest
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request body: %v", err)
+				}
+				if payload.Description != "new description" {
+					t.Errorf("request description = %q, want %q", payload.Description, "new description")
+				}
+
+				w.WriteHeader(http.StatusOK)
+			},
+		},
+		{
+			name: "forbidden",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"403 Forbidden"}`))
+			},
+			wantErr:    true,
+			wantErrSub: "403",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			client := NewClient(server.URL, testToken, testProjectID, testMRIID, nil)
+			err := client.UpdateDescription(context.Background(), "new description")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("UpdateDescription() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("UpdateDescription() error = %q, want substring %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("UpdateDescription() unexpected error: %v", err)
+			}
+		})
+	}
+}

@@ -56,7 +56,8 @@ func main() {
 // The mode is auto-detected, never selected by a subcommand or flag:
 //   - In a Change Request context (a Change Request IID resolved), it computes
 //     the Dependency Report between the Change Request's target branch and its
-//     current commit and creates or updates the Bot Comment (see CONTEXT.md).
+//     current commit and publishes it at the configured Report Destination
+//     (see CONTEXT.md).
 //   - Otherwise, if a base branch was given (--target-branch), it runs a Local
 //     Comparison (see CONTEXT.md): it computes the same Dependency Report
 //     between that branch and the Source, and prints it to out instead of
@@ -74,7 +75,7 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return syncComment(context.Background(), cfg, diff, out)
+		return publishReport(context.Background(), cfg, diff, out)
 
 	case cfg.TargetBranch != "":
 		diff, err := computeDiff(cfg)
@@ -314,21 +315,47 @@ func newForgeClient(cfg config.Config) forge.Client {
 	}
 }
 
-// syncComment creates or updates the Bot Comment on the Change Request to
-// reflect diff, per decideCommentAction, and writes a one-line confirmation
-// of the action taken to out.
-func syncComment(ctx context.Context, cfg config.Config, diff dependencydiff.Report, out io.Writer) error {
+// publishReport publishes diff at the Report Destination in effect for this
+// run and removes it from the other one, writing a one-line summary of each
+// action taken to out.
+//
+// Both destinations are read on every run, whichever is configured: keeping
+// the unused one clean is what stops a Change Request from carrying a frozen
+// report next to a live one after an operator switches the option (see
+// docs/adr/0008-report-destination.md).
+func publishReport(ctx context.Context, cfg config.Config, diff dependencydiff.Report, out io.Writer) error {
 	client := newForgeClient(cfg)
+	body := report.Render(diff)
 
 	comments, err := client.ListComments(ctx)
 	if err != nil {
 		return fmt.Errorf("list comments: %w", err)
 	}
+	existingComment, commentFound := findBotComment(comments)
 
-	existingComment, found := findBotComment(comments)
-	body := report.Render(diff)
+	description, err := client.Description(ctx)
+	if err != nil {
+		return fmt.Errorf("get change request description: %w", err)
+	}
 
-	switch decideCommentAction(diff.IsEmpty(), found) {
+	if cfg.ReportDestination == config.DestinationDescription {
+		if err := syncDescription(ctx, client, description, body, diff.IsEmpty(), out); err != nil {
+			return err
+		}
+
+		return clearComment(ctx, client, existingComment, commentFound, out)
+	}
+
+	if err := syncComment(ctx, client, existingComment, commentFound, body, diff.IsEmpty(), out); err != nil {
+		return err
+	}
+
+	return clearDescription(ctx, client, description, out)
+}
+
+// syncComment brings the Bot Comment in line with body, per decideAction.
+func syncComment(ctx context.Context, client forge.Client, existing forge.Comment, found bool, body string, diffIsEmpty bool, out io.Writer) error {
+	switch decideAction(found, diffIsEmpty, found && existing.Body == body) {
 	case createAction:
 		if _, err := client.CreateComment(ctx, body); err != nil {
 			return fmt.Errorf("create comment: %w", err)
@@ -336,14 +363,85 @@ func syncComment(ctx context.Context, cfg config.Config, diff dependencydiff.Rep
 		fmt.Fprintln(out, "created the Bot Comment with the detected dependency changes")
 
 	case updateAction:
-		if err := client.UpdateComment(ctx, existingComment.ID, body); err != nil {
+		if err := client.UpdateComment(ctx, existing.ID, body); err != nil {
 			return fmt.Errorf("update comment: %w", err)
 		}
 		fmt.Fprintln(out, "updated the Bot Comment with the current dependency changes")
 
 	case noAction:
-		fmt.Fprintln(out, "no dependency changes to report")
+		fmt.Fprintln(out, "the Bot Comment is already up to date")
 	}
+
+	return nil
+}
+
+// syncDescription brings the Description Region in line with body, per
+// decideAction.
+//
+// Creating and updating are the same API call here — the whole description is
+// written back either way — but they stay distinct decisions, because whether
+// the region already exists is exactly what decides that an empty report is
+// left unsaid rather than announced.
+func syncDescription(ctx context.Context, client forge.Client, description, body string, diffIsEmpty bool, out io.Writer) error {
+	next, err := report.SpliceRegion(description, body)
+	if err != nil {
+		return fmt.Errorf("update change request description: %w", err)
+	}
+
+	found := report.HasMarker(description)
+
+	action := decideAction(found, diffIsEmpty, next == description)
+	if action == noAction {
+		fmt.Fprintln(out, "the change request description is already up to date")
+		return nil
+	}
+
+	if err := client.UpdateDescription(ctx, next); err != nil {
+		return fmt.Errorf("update change request description: %w", err)
+	}
+
+	if action == createAction {
+		fmt.Fprintln(out, "added the detected dependency changes to the change request description")
+	} else {
+		fmt.Fprintln(out, "updated the current dependency changes in the change request description")
+	}
+
+	return nil
+}
+
+// clearComment deletes a Bot Comment left over from a run configured for the
+// other Report Destination.
+func clearComment(ctx context.Context, client forge.Client, existing forge.Comment, found bool, out io.Writer) error {
+	if !found {
+		return nil
+	}
+
+	if err := client.DeleteComment(ctx, existing.ID); err != nil {
+		return fmt.Errorf("delete stale comment: %w", err)
+	}
+
+	fmt.Fprintln(out, "deleted the Bot Comment: the report now lives in the change request description")
+
+	return nil
+}
+
+// clearDescription strips a Description Region left over from a run
+// configured for the other Report Destination.
+func clearDescription(ctx context.Context, client forge.Client, description string, out io.Writer) error {
+	next, err := report.RemoveRegion(description)
+	if err != nil {
+		return fmt.Errorf("clean up change request description: %w", err)
+	}
+
+	if next == description {
+		return nil
+	}
+
+	if err := client.UpdateDescription(ctx, next); err != nil {
+		return fmt.Errorf("clean up change request description: %w", err)
+	}
+
+	fmt.Fprintln(out, "removed the report from the change request description: it now lives in the Bot Comment")
 
 	return nil
 }
@@ -361,29 +459,37 @@ func findBotComment(comments []forge.Comment) (forge.Comment, bool) {
 	return forge.Comment{}, false
 }
 
-// commentAction is the action to take on the Bot Comment for a single run.
-type commentAction int
+// reportAction is the action to take at the Report Destination in effect for
+// a single run.
+type reportAction int
 
 const (
-	noAction commentAction = iota
+	noAction reportAction = iota
 	createAction
 	updateAction
 )
 
-// decideCommentAction decides what to do with the Bot Comment given whether
-// the current Dependency Report is empty and whether a Bot Comment already
-// exists on the Change Request.
+// decideAction decides what to publish at the Report Destination in effect,
+// given whether the bot's content is already there (present), whether the
+// current Dependency Report is empty, and whether publishing would produce
+// exactly what is already published (unchanged).
 //
-// Rules:
-//   - no existing Bot Comment, empty diff: there was never anything to
-//     report, so don't create one and add noise.
-//   - no existing Bot Comment, non-empty diff: create it.
-//   - existing Bot Comment, regardless of whether the diff is empty: keep it
-//     in sync, including updating it to say "no changes" if a previously
-//     reported change was reverted.
-func decideCommentAction(diffIsEmpty, existingCommentFound bool) commentAction {
+// The rules are the same for a Bot Comment and a Description Region, so they
+// are stated once here and applied by both callers:
+//   - nothing published yet, empty diff: there was never anything to report,
+//     so stay silent rather than add noise.
+//   - nothing published yet, non-empty diff: publish it.
+//   - already published and identical: write nothing. Every write is an entry
+//     in the Change Request's activity feed and, on a description, a chance to
+//     overwrite an edit the author made in the meantime.
+//   - already published and different, empty diff included: keep it in sync,
+//     including saying "no changes" once a previously reported change was
+//     reverted.
+func decideAction(present, diffIsEmpty, unchanged bool) reportAction {
 	switch {
-	case existingCommentFound:
+	case present && unchanged:
+		return noAction
+	case present:
 		return updateAction
 	case diffIsEmpty:
 		return noAction

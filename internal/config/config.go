@@ -32,6 +32,45 @@ func (f Forge) String() string {
 	return "GitLab"
 }
 
+// ReportDestination selects where the Dependency Report lands on a Change
+// Request (see CONTEXT.md: Report Destination). Exactly one destination is in
+// effect per run — the bot maintains the report there and removes it from the
+// other one.
+type ReportDestination int
+
+const (
+	// DestinationComment is the default: the Bot Comment, a comment of the
+	// bot's own on the Change Request.
+	DestinationComment ReportDestination = iota
+	// DestinationDescription is the Description Region, a delimited region
+	// of the Change Request's own description.
+	DestinationDescription
+)
+
+// String returns the destination's CLI spelling, so error messages and flag
+// descriptions use the same word an operator types.
+func (d ReportDestination) String() string {
+	if d == DestinationDescription {
+		return "description"
+	}
+	return "comment"
+}
+
+// parseReportDestination parses the --report-destination value. Empty means
+// the default (the Bot Comment); anything unrecognized is a hard error, so an
+// operator learns immediately that their pipeline is not publishing where they
+// think it is, rather than silently getting the default.
+func parseReportDestination(raw string) (ReportDestination, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "comment":
+		return DestinationComment, nil
+	case "description":
+		return DestinationDescription, nil
+	default:
+		return 0, fmt.Errorf("report-destination: unknown destination %q (want \"comment\" or \"description\")", raw)
+	}
+}
+
 // Config holds everything the bot needs to run for one invocation.
 type Config struct {
 	Forge Forge
@@ -48,6 +87,12 @@ type Config struct {
 	YarnLockPath           string // path to yarn.lock (Yarn Ecosystem, see CONTEXT.md)
 	RepoDir                string
 	InChangeRequestContext bool // true iff ChangeRequestIID resolved to a non-empty value
+
+	// ReportDestination is where the Dependency Report is published in a
+	// Change Request context (see CONTEXT.md: Report Destination). It has no
+	// effect on a Local Comparison, which prints to the terminal and
+	// publishes nothing.
+	ReportDestination ReportDestination
 
 	// ConsideredEcosystems is the operator-declared allowlist of Ecosystems the
 	// bot is permitted to examine for this run (see CONTEXT.md: Considered
@@ -117,6 +162,7 @@ func Load(args []string) (Config, error) {
 	yarnLockPath := fs.String("yarn-lock-path", "", "Path to yarn.lock (default: $DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH, or \"yarn.lock\")")
 	repoDir := fs.String("repo-dir", "", "Path to the repository checkout (default: \".\")")
 	ecosystems := fs.String("ecosystems", "", "Comma-separated Ecosystems to consider, e.g. \"composer,pnpm\" (default: $DEPENDENCY_DIFF_NOTES_ECOSYSTEMS, or all present)")
+	reportDestination := fs.String("report-destination", "", "Where to publish the report: \"comment\" or \"description\" (default: $DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION, or \"comment\"); ignored outside a Change Request")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
@@ -129,8 +175,14 @@ func Load(args []string) (Config, error) {
 		return Config{}, err
 	}
 
+	destination, err := parseReportDestination(resolve(*reportDestination, "DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION", ""))
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Forge:                forge,
+		ReportDestination:    destination,
 		ComposerLockPath:     resolve(*composerLockPath, "DEPENDENCY_DIFF_NOTES_COMPOSER_LOCK_PATH", defaultComposerLockPath),
 		NPMLockPath:          resolve(*npmLockPath, "DEPENDENCY_DIFF_NOTES_NPM_LOCK_PATH", defaultNPMLockPath),
 		PnpmLockPath:         resolve(*pnpmLockPath, "DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH", defaultPnpmLockPath),

@@ -7,22 +7,48 @@
 package report
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jdecool/dependency-diff-notes/internal/dependencydiff"
 )
 
-// Marker is a hidden HTML comment identifying a note as the bot's own,
-// so the bot can find and update it instead of creating a duplicate.
+// Marker is a hidden HTML comment identifying content as the bot's own, so
+// the bot can find and update it instead of creating a duplicate. In a Bot
+// Comment it merely identifies the comment; in a Description Region (see
+// CONTEXT.md) it is also the opening delimiter of the region the bot owns.
+//
+// Its value is deliberately unchanged from when the Bot Comment was the only
+// Report Destination: Bot Comments already published on open Change Requests
+// keep being recognized, so none of them is orphaned and duplicated.
 const Marker = "<!-- dependency-diff-notes -->"
+
+// EndMarker closes a Description Region. It is emitted in a Bot Comment too,
+// where it delimits nothing (the bot owns the whole body), so that one Render
+// serves both Report Destinations.
+//
+// It contains Marker's text but not Marker itself (the leading slash breaks
+// the substring), so searching a description for Marker can never match the
+// closing delimiter by accident.
+const EndMarker = "<!-- /dependency-diff-notes -->"
+
+// ErrUnterminatedRegion reports a description carrying Marker with no
+// EndMarker after it. The bot refuses to guess where its region ends rather
+// than assume it runs to the end of the document: that assumption would delete
+// whatever a human wrote below it, and this error means the document has
+// demonstrably been hand-edited (see docs/adr/0008-report-destination.md).
+var ErrUnterminatedRegion = errors.New("description contains the opening marker without a closing one: the bot's region cannot be delimited, restore or remove the marker by hand")
 
 // shortRefLength is how many leading characters of a reference (a Git commit
 // hash) are shown, mirroring the short hash format Git itself uses.
 const shortRefLength = 7
 
-// Render renders r into the full Markdown body of the Bot Comment,
-// including the leading Marker.
+// Render renders r into the full Markdown body published at either Report
+// Destination (see CONTEXT.md), delimited by Marker and EndMarker. The body is
+// identical for both: the content is the same and both Forges render it with
+// the same Markdown engine, so one rendering keeps a Local Comparison a
+// faithful preview whatever the configured destination.
 //
 // Each Ecosystem gets a Markdown heading followed by a collapsible section
 // holding its tables. The heading deliberately sits *outside* the <details>
@@ -44,6 +70,7 @@ func Render(r dependencydiff.Report) string {
 
 	if r.IsEmpty() {
 		b.WriteString("\nNo dependency changes detected.\n")
+		b.WriteString(EndMarker + "\n")
 		return b.String()
 	}
 
@@ -70,7 +97,102 @@ func Render(r dependencydiff.Report) string {
 		b.WriteString("\n</details>\n")
 	}
 
+	b.WriteString(EndMarker + "\n")
+
 	return b.String()
+}
+
+// SpliceRegion returns description with the bot's Description Region (see
+// CONTEXT.md) set to body, which must be a Render output — that is, already
+// delimited by Marker and EndMarker.
+//
+// An existing region is replaced where it stands, so a region the author has
+// moved is updated in place rather than dragged back to the bottom. When
+// there is none, the region is appended at the end, separated by one blank
+// line. Everything outside the two markers is returned byte for byte as it
+// came in: the description belongs to the author, and the bot only ever
+// rewrites what lies strictly between its own delimiters.
+//
+// The result is what should be published; the caller compares it with the
+// original to decide whether an API write is warranted at all.
+func SpliceRegion(description, body string) (string, error) {
+	start, end, found, err := locateRegion(description)
+	if err != nil {
+		return "", err
+	}
+
+	if found {
+		return description[:start] + body + description[end:], nil
+	}
+
+	return description + blankLineSeparator(description) + body, nil
+}
+
+// RemoveRegion returns description with the bot's Description Region removed,
+// or unchanged if there is none. Used to clean up the destination that is no
+// longer in effect, so a Change Request never carries a frozen report next to
+// a live one (see docs/adr/0008-report-destination.md).
+//
+// The blank line that separated the region from the author's text is left
+// behind rather than trimmed, since it sits outside the markers and is not the
+// bot's to delete. It renders as nothing, and a later re-insertion reuses it
+// instead of adding another.
+func RemoveRegion(description string) (string, error) {
+	start, end, found, err := locateRegion(description)
+	if err != nil {
+		return "", err
+	}
+
+	if !found {
+		return description, nil
+	}
+
+	return description[:start] + description[end:], nil
+}
+
+// locateRegion returns the byte offsets delimiting the bot's region in
+// description, markers included, and whether one is present. It reports
+// ErrUnterminatedRegion when an opening marker has no closing one.
+//
+// The span extends past the newline following the closing marker when there
+// is one, because Render emits it: it is the bot's own byte, not the author's.
+// Counting it in is what makes an insert/remove cycle stable instead of
+// leaving one more blank line behind every time.
+func locateRegion(description string) (start, end int, found bool, err error) {
+	start = strings.Index(description, Marker)
+	if start < 0 {
+		return 0, 0, false, nil
+	}
+
+	afterOpen := start + len(Marker)
+
+	rel := strings.Index(description[afterOpen:], EndMarker)
+	if rel < 0 {
+		return 0, 0, false, ErrUnterminatedRegion
+	}
+
+	end = afterOpen + rel + len(EndMarker)
+	if strings.HasPrefix(description[end:], "\n") {
+		end++
+	}
+
+	return start, end, true, nil
+}
+
+// blankLineSeparator returns the newlines to insert between description and a
+// region appended after it, so exactly one blank line separates them without
+// ever removing a character the author wrote.
+func blankLineSeparator(description string) string {
+	switch {
+	case description == "":
+		return ""
+	case strings.HasSuffix(description, "\n\n"):
+		return ""
+	case strings.HasSuffix(description, "\n"):
+		return "\n"
+	default:
+		return "\n\n"
+	}
 }
 
 // nonEmptySections returns the Report's sections that actually carry changes,

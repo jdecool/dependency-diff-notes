@@ -267,3 +267,198 @@ func TestNewClient_DefaultHTTPClient(t *testing.T) {
 		t.Errorf("baseURL = %q, want %q", c.baseURL, apiURL)
 	}
 }
+
+func TestDeleteComment(t *testing.T) {
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					t.Errorf("method = %s, want DELETE", r.Method)
+				}
+				// Like updates, GitHub addresses comment deletions by
+				// repository rather than by pull request number.
+				if want := "/repos/owner/repo/issues/comments/9"; r.URL.EscapedPath() != want {
+					t.Errorf("path = %s, want %s", r.URL.EscapedPath(), want)
+				}
+
+				w.WriteHeader(http.StatusNoContent)
+			},
+		},
+		{
+			name: "forbidden",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"Forbidden"}`))
+			},
+			wantErr:    true,
+			wantErrSub: "403",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			err := newTestClient(server).DeleteComment(context.Background(), 9)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("DeleteComment() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("DeleteComment() error = %q, want substring %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("DeleteComment() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDescription(t *testing.T) {
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		want       string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("method = %s, want GET", r.Method)
+				}
+				// The description lives on the pull request resource,
+				// unlike comments, which GitHub models as issue comments.
+				if want := "/repos/owner/repo/pulls/42"; r.URL.EscapedPath() != want {
+					t.Errorf("path = %s, want %s", r.URL.EscapedPath(), want)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"number":42,"body":"Closes #12."}`))
+			},
+			want: "Closes #12.",
+		},
+		{
+			name: "null body decodes to the empty string",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"number":42,"body":null}`))
+			},
+			want: "",
+		},
+		{
+			name: "not found",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+			},
+			wantErr:    true,
+			wantErrSub: "404",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			got, err := newTestClient(server).Description(context.Background())
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Description() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("Description() error = %q, want substring %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Description() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Description() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateDescription(t *testing.T) {
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPatch {
+					t.Errorf("method = %s, want PATCH", r.Method)
+				}
+				if want := "/repos/owner/repo/pulls/42"; r.URL.EscapedPath() != want {
+					t.Errorf("path = %s, want %s", r.URL.EscapedPath(), want)
+				}
+				if got := r.Header.Get("Content-Type"); got != "application/json" {
+					t.Errorf("Content-Type = %q, want application/json", got)
+				}
+
+				var payload pullRequest
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request body: %v", err)
+				}
+				if payload.Body != "new description" {
+					t.Errorf("request body = %q, want %q", payload.Body, "new description")
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"number":42,"body":"new description"}`))
+			},
+		},
+		{
+			name: "forbidden",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
+			},
+			wantErr:    true,
+			wantErrSub: "403",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			err := newTestClient(server).UpdateDescription(context.Background(), "new description")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("UpdateDescription() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("UpdateDescription() error = %q, want substring %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("UpdateDescription() unexpected error: %v", err)
+			}
+		})
+	}
+}

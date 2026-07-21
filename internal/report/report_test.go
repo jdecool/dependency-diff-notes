@@ -1,6 +1,7 @@
 package report_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -217,9 +218,14 @@ func TestRender_ExactBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Every body closes on EndMarker, so that one Render serves
+			// both Report Destinations: appending it here asserts that
+			// invariant once instead of repeating it in each want.
+			want := tt.want + report.EndMarker + "\n"
+
 			got := report.Render(tt.in)
-			if got != tt.want {
-				t.Errorf("Render() =\n%q\nwant\n%q", got, tt.want)
+			if got != want {
+				t.Errorf("Render() =\n%q\nwant\n%q", got, want)
 			}
 		})
 	}
@@ -469,5 +475,171 @@ func TestRenderText_ExactBody(t *testing.T) {
 				t.Errorf("RenderText() mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// regionBody is a stand-in for a Render output: what matters to the splicing
+// tests is only that it is delimited by the two markers and ends on a newline.
+var regionBody = report.Marker + "\n## Dependency changes\n" + report.EndMarker + "\n"
+
+func TestSpliceRegion(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		want        string
+	}{
+		{
+			name:        "empty description holds the region alone",
+			description: "",
+			want:        regionBody,
+		},
+		{
+			name:        "description without a trailing newline gets one blank line",
+			description: "Fixes the flaky checkout.",
+			want:        "Fixes the flaky checkout.\n\n" + regionBody,
+		},
+		{
+			name:        "description ending on one newline gets one more",
+			description: "Fixes the flaky checkout.\n",
+			want:        "Fixes the flaky checkout.\n\n" + regionBody,
+		},
+		{
+			name:        "description already ending on a blank line gets none added",
+			description: "Fixes the flaky checkout.\n\n",
+			want:        "Fixes the flaky checkout.\n\n" + regionBody,
+		},
+		{
+			name:        "an existing region at the end is replaced",
+			description: "Intro.\n\n" + report.Marker + "\nstale\n" + report.EndMarker + "\n",
+			want:        "Intro.\n\n" + regionBody,
+		},
+		{
+			name:        "a region the author moved is updated where it stands",
+			description: "Intro.\n\n" + report.Marker + "\nstale\n" + report.EndMarker + "\n\nCloses #12.\n",
+			want:        "Intro.\n\n" + regionBody + "\nCloses #12.\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := report.SpliceRegion(tt.description, regionBody)
+			if err != nil {
+				t.Fatalf("SpliceRegion() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("SpliceRegion() =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSpliceRegionIsIdempotent(t *testing.T) {
+	// Publishing the same report twice must produce a byte-identical
+	// description: that equality is exactly what tells the orchestrator no
+	// API write is warranted (see docs/adr/0008-report-destination.md).
+	once, err := report.SpliceRegion("Intro.\n", regionBody)
+	if err != nil {
+		t.Fatalf("SpliceRegion() unexpected error: %v", err)
+	}
+
+	twice, err := report.SpliceRegion(once, regionBody)
+	if err != nil {
+		t.Fatalf("SpliceRegion() unexpected error on second pass: %v", err)
+	}
+
+	if twice != once {
+		t.Errorf("SpliceRegion() is not idempotent:\n first: %q\nsecond: %q", once, twice)
+	}
+}
+
+func TestRemoveRegion(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		want        string
+	}{
+		{
+			name:        "a description with no region is returned untouched",
+			description: "Fixes the flaky checkout.\n",
+			want:        "Fixes the flaky checkout.\n",
+		},
+		{
+			name:        "an empty description is returned untouched",
+			description: "",
+			want:        "",
+		},
+		{
+			name:        "a trailing region is removed, leaving the author's text",
+			description: "Intro.\n\n" + regionBody,
+			want:        "Intro.\n\n",
+		},
+		{
+			name:        "text below the region survives",
+			description: "Intro.\n\n" + report.Marker + "\nstale\n" + report.EndMarker + "\n\nCloses #12.\n",
+			want:        "Intro.\n\n\nCloses #12.\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := report.RemoveRegion(tt.description)
+			if err != nil {
+				t.Fatalf("RemoveRegion() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("RemoveRegion() =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSpliceRemoveCycleDoesNotDrift covers the decision that an operator can
+// switch the Report Destination back and forth without the description slowly
+// filling with blank lines: the region owns the newline that closes it, so
+// removing and re-inserting returns to the same bytes.
+func TestSpliceRemoveCycleDoesNotDrift(t *testing.T) {
+	const original = "Intro.\n"
+
+	withRegion, err := report.SpliceRegion(original, regionBody)
+	if err != nil {
+		t.Fatalf("SpliceRegion() unexpected error: %v", err)
+	}
+
+	stripped, err := report.RemoveRegion(withRegion)
+	if err != nil {
+		t.Fatalf("RemoveRegion() unexpected error: %v", err)
+	}
+
+	again, err := report.SpliceRegion(stripped, regionBody)
+	if err != nil {
+		t.Fatalf("SpliceRegion() unexpected error on re-insertion: %v", err)
+	}
+
+	if again != withRegion {
+		t.Errorf("splice/remove/splice drifted:\n first: %q\n after: %q", withRegion, again)
+	}
+}
+
+// TestUnterminatedRegionIsRefused covers the decision that the bot never
+// guesses where its region ends: assuming it runs to the end of the document
+// would delete whatever a human wrote below the missing closing marker.
+func TestUnterminatedRegionIsRefused(t *testing.T) {
+	description := "Intro.\n\n" + report.Marker + "\nstale\n\nCloses #12.\n"
+
+	if _, err := report.SpliceRegion(description, regionBody); !errors.Is(err, report.ErrUnterminatedRegion) {
+		t.Errorf("SpliceRegion() error = %v, want ErrUnterminatedRegion", err)
+	}
+
+	if _, err := report.RemoveRegion(description); !errors.Is(err, report.ErrUnterminatedRegion) {
+		t.Errorf("RemoveRegion() error = %v, want ErrUnterminatedRegion", err)
+	}
+}
+
+// TestEndMarkerDoesNotContainMarker guards the property that lets a region be
+// located by searching for Marker: if EndMarker ever contained it, the search
+// could match the closing delimiter and mis-delimit the region.
+func TestEndMarkerDoesNotContainMarker(t *testing.T) {
+	if strings.Contains(report.EndMarker, report.Marker) {
+		t.Errorf("EndMarker %q contains Marker %q, which would break region location", report.EndMarker, report.Marker)
 	}
 }

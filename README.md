@@ -65,7 +65,7 @@ A Docker image is also published to [`ghcr.io/jdecool/dependency-diff-notes`](ht
 dependency-diff-notes
 ```
 
-In a CI pipeline it posts its report as a comment on the Change Request; run from a terminal it prints the same report to stdout (see [Local comparison](#local-comparison)).
+In a CI pipeline it posts its report as a comment on the Change Request, or into the Change Request's description if you'd rather (see [Reporting in the Change Request description](#reporting-in-the-change-request-description)); run from a terminal it prints the same report to stdout (see [Local comparison](#local-comparison)).
 
 The bot supports two Forges (see CONTEXT.md): GitLab and GitHub.
 Which one is active is detected automatically from the CI environment — GitHub Actions always sets `GITHUB_ACTIONS=true`; anything else is treated as GitLab — so no flag or extra configuration is needed to select one.
@@ -144,6 +144,7 @@ Configuration is resolved from CLI flags first, then from the matching environme
 | `--pnpm-lock-path`     | Path to `pnpm-lock.yaml`          | `DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH`     | `DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH` | `pnpm-lock.yaml` |
 | `--yarn-lock-path`     | Path to `yarn.lock`               | `DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH`     | `DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH` | `yarn.lock` |
 | `--ecosystems`         | Comma-separated Ecosystems to consider, e.g. `composer,pnpm` | `DEPENDENCY_DIFF_NOTES_ECOSYSTEMS` | `DEPENDENCY_DIFF_NOTES_ECOSYSTEMS` | all present |
+| `--report-destination` | Where to publish the report: `comment` or `description` | `DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION` | `DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION` | `comment` |
 | `--repo-dir`           | Path to the repository checkout   | none                                      | none                           | `.` |
 
 `--server-url` (GitLab only), `--project-id`, `--target-branch`, and `--token` are only required once the bot detects it's running in a Change Request context (i.e. `--request-iid` resolves to a non-empty value, from the flag, `CI_MERGE_REQUEST_IID`, or `GITHUB_REF`).
@@ -154,6 +155,38 @@ For a [local comparison](#local-comparison) (no Change Request context) only `--
 Left unset, every Ecosystem is considered — the historical behavior.
 Its main use is resolving the JavaScript Lockfile conflict above: on a project that carries both `package-lock.json` and `pnpm-lock.yaml`, set `--ecosystems=composer,pnpm` (or just `pnpm`) to tell the bot which JavaScript package manager is real, and the stray Lockfile is ignored for the whole run.
 The restriction is permanent, not consulted only on conflict, so an excluded Ecosystem is dropped at every ref (see `docs/adr/0005-ecosystem-allowlist.md`).
+
+### Reporting in the Change Request description
+
+By default the bot publishes its report as a comment on the Change Request.
+With `--report-destination=description` it publishes into the Change Request's own description instead (a GitLab Merge Request description, a GitHub Pull Request body):
+
+```bash
+dependency-diff-notes --report-destination description
+```
+
+The two destinations are exclusive: the report is never published to both at once.
+Switching the option is safe at any point in a review - on its next run the bot removes the report from the destination no longer in effect, so a Change Request never ends up carrying a stale report next to a live one.
+
+In the description, the bot owns only a delimited region:
+
+```markdown
+Whatever the author wrote stays exactly as it is.
+
+<!-- dependency-diff-notes -->
+## Dependency changes
+...
+<!-- /dependency-diff-notes -->
+```
+
+- Everything outside the two markers is left untouched, byte for byte.
+- The region is appended at the end of the description the first time; after that it is updated wherever it stands, so moving it up in the description is respected rather than undone on the next run.
+- Deleting the closing marker by hand fails the run with an explicit error. The bot will not assume its region runs to the end of the document, because that assumption would delete whatever was written below it.
+- Nothing is written when the rendered report is identical to what is already published, so a pipeline running on every push does not fill the merge request activity feed with "changed the description".
+
+Writing the description needs more permission than posting a comment: on GitHub Actions the step needs `permissions: pull-requests: write`, and on GitLab the token must be allowed to modify the merge request, not only to post notes on it.
+
+See `docs/adr/0008-report-destination.md` for the reasoning behind these choices.
 
 ### pnpm lockfileVersion support
 

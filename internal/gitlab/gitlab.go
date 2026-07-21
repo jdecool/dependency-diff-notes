@@ -1,5 +1,6 @@
 // Package gitlab provides a minimal GitLab REST API v4 client covering only
-// what this bot needs: listing, creating, and updating merge request notes.
+// what this bot needs: listing, creating, updating and deleting merge request
+// notes, and reading and writing the merge request description.
 // See docs/adr/0001-minimal-gitlab-client.md for the rationale behind
 // hand-writing this client instead of depending on an external SDK.
 package gitlab
@@ -151,6 +152,91 @@ func (c *Client) UpdateComment(ctx context.Context, id int, body string) error {
 
 	if err := checkStatus(resp); err != nil {
 		return fmt.Errorf("update note: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteComment removes an existing note from the bound merge request.
+func (c *Client) DeleteComment(ctx context.Context, id int) error {
+	path := fmt.Sprintf("%s/%d", c.notesPath(), id)
+
+	req, err := c.newRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("build delete note request: %w", err)
+	}
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("delete note: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp); err != nil {
+		return fmt.Errorf("delete note: %w", err)
+	}
+
+	return nil
+}
+
+// mergeRequestPath builds the /merge_requests/{mrIID} path for the client's
+// bound project and merge request. Unlike notes, the description lives on the
+// merge request resource itself.
+func (c *Client) mergeRequestPath() string {
+	return fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s", url.PathEscape(c.projectID), url.PathEscape(c.mrIID))
+}
+
+// mergeRequest is the subset of a GitLab merge request the bot reads.
+type mergeRequest struct {
+	Description string `json:"description"`
+}
+
+// Description returns the bound merge request's current description.
+func (c *Client) Description(ctx context.Context) (string, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, c.mergeRequestPath(), nil)
+	if err != nil {
+		return "", fmt.Errorf("build get merge request: %w", err)
+	}
+
+	resp, err := c.do(req)
+	if err != nil {
+		return "", fmt.Errorf("get merge request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp); err != nil {
+		return "", fmt.Errorf("get merge request: %w", err)
+	}
+
+	var mr mergeRequest
+	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+		return "", fmt.Errorf("decode merge request response: %w", err)
+	}
+
+	return mr.Description, nil
+}
+
+// UpdateDescription replaces the bound merge request's description.
+func (c *Client) UpdateDescription(ctx context.Context, body string) error {
+	payload, err := json.Marshal(mergeRequest{Description: body})
+	if err != nil {
+		return fmt.Errorf("encode update merge request request: %w", err)
+	}
+
+	req, err := c.newRequest(ctx, http.MethodPut, c.mergeRequestPath(), bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build update merge request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("update merge request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp); err != nil {
+		return fmt.Errorf("update merge request: %w", err)
 	}
 
 	return nil
