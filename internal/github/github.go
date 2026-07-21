@@ -1,6 +1,6 @@
 // Package github provides a minimal GitHub REST API client covering only
-// what this bot needs: listing, creating, and updating pull request (issue)
-// comments. See docs/adr/0003-minimal-github-client.md for the rationale
+// what this bot needs: listing, creating, updating and deleting pull request
+// (issue) comments, and reading and writing the pull request body. See docs/adr/0003-minimal-github-client.md for the rationale
 // behind hand-writing this client instead of depending on an external SDK.
 package github
 
@@ -130,6 +130,95 @@ func (c *Client) CreateComment(ctx context.Context, body string) (forge.Comment,
 	}
 
 	return forge.Comment{ID: cm.ID, Body: cm.Body}, nil
+}
+
+// DeleteComment removes an existing comment, used to clear the Bot Comment
+// when the report has moved to the description. Like updates, GitHub
+// addresses comment deletions by repository, not by pull request number.
+func (c *Client) DeleteComment(ctx context.Context, id int) error {
+	path := fmt.Sprintf("/repos/%s/issues/comments/%d", c.repository, id)
+
+	req, err := c.newRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("build delete comment request: %w", err)
+	}
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("delete comment: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp); err != nil {
+		return fmt.Errorf("delete comment: %w", err)
+	}
+
+	return nil
+}
+
+// pullPath builds the /repos/{owner}/{repo}/pulls/{number} path. The
+// description lives on the pull request resource, unlike comments, which
+// GitHub models as issue comments.
+func (c *Client) pullPath() string {
+	return fmt.Sprintf("/repos/%s/pulls/%s", c.repository, c.prNumber)
+}
+
+// pullRequest is the subset of a GitHub pull request the bot reads and
+// writes. GitHub calls the description "body", the same word it uses for a
+// comment's text.
+type pullRequest struct {
+	Body string `json:"body"`
+}
+
+// Description returns the bound pull request's current body.
+func (c *Client) Description(ctx context.Context) (string, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, c.pullPath(), nil)
+	if err != nil {
+		return "", fmt.Errorf("build get pull request: %w", err)
+	}
+
+	resp, err := c.do(req)
+	if err != nil {
+		return "", fmt.Errorf("get pull request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp); err != nil {
+		return "", fmt.Errorf("get pull request: %w", err)
+	}
+
+	var pr pullRequest
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return "", fmt.Errorf("decode pull request response: %w", err)
+	}
+
+	return pr.Body, nil
+}
+
+// UpdateDescription replaces the bound pull request's body.
+func (c *Client) UpdateDescription(ctx context.Context, body string) error {
+	payload, err := json.Marshal(pullRequest{Body: body})
+	if err != nil {
+		return fmt.Errorf("encode update pull request request: %w", err)
+	}
+
+	req, err := c.newRequest(ctx, http.MethodPatch, c.pullPath(), bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build update pull request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("update pull request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp); err != nil {
+		return fmt.Errorf("update pull request: %w", err)
+	}
+
+	return nil
 }
 
 // UpdateComment replaces the body of an existing comment. GitHub addresses

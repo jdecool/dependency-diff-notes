@@ -22,6 +22,7 @@ var allEnvVars = []string{
 	"DEPENDENCY_DIFF_NOTES_PNPM_LOCK_PATH",
 	"DEPENDENCY_DIFF_NOTES_YARN_LOCK_PATH",
 	"DEPENDENCY_DIFF_NOTES_ECOSYSTEMS",
+	"DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION",
 	"GITHUB_REPOSITORY",
 	"GITHUB_REF",
 	"GITHUB_BASE_REF",
@@ -475,6 +476,84 @@ func TestParseGitHubPRNumber(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := parseGitHubPRNumber(tt.ref); got != tt.want {
 				t.Errorf("parseGitHubPRNumber(%q) = %q, want %q", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_ReportDestination(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		env     map[string]string
+		want    ReportDestination
+		wantErr string // non-empty substring expected in the error, "" means no error
+	}{
+		{
+			name: "unset defaults to the Bot Comment",
+			args: []string{},
+			want: DestinationComment,
+		},
+		{
+			name: "flag selects the description",
+			args: []string{"--report-destination", "description"},
+			want: DestinationDescription,
+		},
+		{
+			name: "flag selects the comment explicitly",
+			args: []string{"--report-destination", "comment"},
+			want: DestinationComment,
+		},
+		{
+			name: "case-insensitive with surrounding whitespace",
+			args: []string{"--report-destination", "  Description "},
+			want: DestinationDescription,
+		},
+		{
+			name: "env var is honored when the flag is absent",
+			args: []string{},
+			env:  map[string]string{"DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION": "description"},
+			want: DestinationDescription,
+		},
+		{
+			name: "flag overrides env",
+			args: []string{"--report-destination", "comment"},
+			env:  map[string]string{"DEPENDENCY_DIFF_NOTES_REPORT_DESTINATION": "description"},
+			want: DestinationComment,
+		},
+		{
+			// An irrelevant option is tolerated, an incomprehensible one is
+			// not: an operator must learn immediately that their pipeline
+			// is not publishing where they think it is.
+			name:    "unknown destination is a fail-fast error",
+			args:    []string{"--report-destination", "banana"},
+			wantErr: "unknown destination",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range allEnvVars {
+				t.Setenv(name, tt.env[name])
+			}
+
+			got, err := Load(tt.args)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want error containing %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %q, want it to contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			if got.ReportDestination != tt.want {
+				t.Errorf("ReportDestination = %v, want %v", got.ReportDestination, tt.want)
 			}
 		})
 	}

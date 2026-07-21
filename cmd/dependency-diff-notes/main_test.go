@@ -19,44 +19,61 @@ import (
 	"github.com/jdecool/dependency-diff-notes/internal/report"
 )
 
-func TestDecideCommentAction(t *testing.T) {
+func TestDecideAction(t *testing.T) {
 	tests := []struct {
-		name                 string
-		diffIsEmpty          bool
-		existingCommentFound bool
-		want                 commentAction
+		name        string
+		present     bool
+		diffIsEmpty bool
+		unchanged   bool
+		want        reportAction
 	}{
 		{
-			name:                 "no existing comment, empty diff",
-			diffIsEmpty:          true,
-			existingCommentFound: false,
-			want:                 noAction,
+			name:        "nothing published, empty diff",
+			present:     false,
+			diffIsEmpty: true,
+			want:        noAction,
 		},
 		{
-			name:                 "no existing comment, non-empty diff",
-			diffIsEmpty:          false,
-			existingCommentFound: false,
-			want:                 createAction,
+			name:        "nothing published, non-empty diff",
+			present:     false,
+			diffIsEmpty: false,
+			want:        createAction,
 		},
 		{
-			name:                 "existing comment, empty diff",
-			diffIsEmpty:          true,
-			existingCommentFound: true,
-			want:                 updateAction,
+			name:        "already published, empty diff, differing content",
+			present:     true,
+			diffIsEmpty: true,
+			unchanged:   false,
+			want:        updateAction,
 		},
 		{
-			name:                 "existing comment, non-empty diff",
-			diffIsEmpty:          false,
-			existingCommentFound: true,
-			want:                 updateAction,
+			name:        "already published, non-empty diff, differing content",
+			present:     true,
+			diffIsEmpty: false,
+			unchanged:   false,
+			want:        updateAction,
+		},
+		{
+			name:        "already published, identical content",
+			present:     true,
+			diffIsEmpty: false,
+			unchanged:   true,
+			want:        noAction,
+		},
+		{
+			name:        "already published, identical content, empty diff",
+			present:     true,
+			diffIsEmpty: true,
+			unchanged:   true,
+			want:        noAction,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := decideCommentAction(tt.diffIsEmpty, tt.existingCommentFound)
+			got := decideAction(tt.present, tt.diffIsEmpty, tt.unchanged)
 			if got != tt.want {
-				t.Errorf("decideCommentAction(%v, %v) = %v, want %v", tt.diffIsEmpty, tt.existingCommentFound, got, tt.want)
+				t.Errorf("decideAction(%v, %v, %v) = %v, want %v", tt.present, tt.diffIsEmpty, tt.unchanged, got, tt.want)
 			}
 		})
 	}
@@ -184,8 +201,10 @@ type commentJSON struct {
 }
 
 // fakeGitLabServer spins up an httptest.Server acting as the GitLab API for
-// a single project/merge request, recording the notes-related calls it
-// receives. existingNotes is served as the response to ListNotes.
+// a single project/merge request, recording the calls it receives on both
+// Report Destinations (see CONTEXT.md). existingNotes is served as the
+// response to ListNotes; description holds the merge request description and
+// may be set by a test before calling run().
 type fakeGitLabServer struct {
 	*httptest.Server
 
@@ -195,6 +214,11 @@ type fakeGitLabServer struct {
 	updateCalled    bool
 	updateNoteID    string
 	updateBody      string
+	deleteCalled    bool
+	deleteNoteID    string
+
+	description        string
+	descriptionUpdated bool
 }
 
 func newFakeGitLabServer(t *testing.T, projectID, mrIID string, existingNotes []commentJSON) *fakeGitLabServer {
@@ -203,8 +227,34 @@ func newFakeGitLabServer(t *testing.T, projectID, mrIID string, existingNotes []
 	f := &fakeGitLabServer{}
 
 	notesPath := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/notes", projectID, mrIID)
+	mrPath := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s", projectID, mrIID)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+mrPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"description": f.description}); err != nil {
+			t.Fatalf("encode merge request response: %v", err)
+		}
+	})
+	mux.HandleFunc("PUT "+mrPath, func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode update merge request request: %v", err)
+		}
+
+		f.descriptionUpdated = true
+		f.description = payload.Description
+
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("DELETE "+notesPath+"/{noteID}", func(w http.ResponseWriter, r *http.Request) {
+		f.deleteCalled = true
+		f.deleteNoteID = r.PathValue("noteID")
+
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET "+notesPath, func(w http.ResponseWriter, r *http.Request) {
 		f.listNotesCalled = true
 		w.Header().Set("Content-Type", "application/json")
@@ -674,5 +724,192 @@ func TestRunLocalComparisonNoChanges(t *testing.T) {
 
 	if out := buf.String(); !strings.Contains(out, "No dependency changes detected.") {
 		t.Errorf("output = %q, want it to report no dependency changes", out)
+	}
+}
+
+// --- Report Destination (see CONTEXT.md) end-to-end tests ---
+
+// descriptionArgs is runArgs with the description Report Destination selected.
+func descriptionArgs(repoDir, serverURL, projectID, mrIID string) []string {
+	return append(runArgs(repoDir, serverURL, projectID, mrIID), "--report-destination", "description")
+}
+
+func TestRunPublishesReportInDescriptionAndLeavesAuthorTextAlone(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+	server.description = "Bumps the vendored packages.\n\nCloses #12.\n"
+
+	if err := run(descriptionArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if !server.descriptionUpdated {
+		t.Fatal("expected the merge request description to be updated")
+	}
+	if server.createCalled {
+		t.Error("expected no Bot Comment to be created when the report goes to the description")
+	}
+	if !strings.HasPrefix(server.description, "Bumps the vendored packages.\n\nCloses #12.\n") {
+		t.Errorf("description = %q, want the author's text preserved verbatim at the front", server.description)
+	}
+	if !strings.Contains(server.description, "vendor/pkg2") {
+		t.Errorf("description = %q, want it to report vendor/pkg2", server.description)
+	}
+	if !strings.Contains(server.description, report.EndMarker) {
+		t.Errorf("description = %q, want the region to be closed by the end marker", server.description)
+	}
+}
+
+func TestRunDescriptionModeDeletesTheStaleBotComment(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// A Bot Comment left over from before the operator switched destination:
+	// it would never be updated again, so it must not survive next to a live
+	// report in the description.
+	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
+	existing := []commentJSON{
+		{ID: 7, Body: report.Marker + "\n## Dependency changes\n\nstale\n" + report.EndMarker + "\n"},
+	}
+	server := newFakeGitLabServer(t, "123", "45", existing)
+
+	if err := run(descriptionArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if !server.deleteCalled {
+		t.Fatal("expected the stale Bot Comment to be deleted")
+	}
+	if server.deleteNoteID != "7" {
+		t.Errorf("deleted note ID = %q, want %q", server.deleteNoteID, "7")
+	}
+	if server.updateCalled {
+		t.Error("expected the stale Bot Comment to be deleted, not updated")
+	}
+	if !strings.Contains(server.description, "vendor/pkg2") {
+		t.Errorf("description = %q, want the report to have moved there", server.description)
+	}
+}
+
+func TestRunCommentModeStripsTheStaleDescriptionRegion(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// The mirror image: a region left in the description after switching back
+	// to the Bot Comment.
+	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+	server.description = "Bumps the vendored packages.\n\n" +
+		report.Marker + "\n## Dependency changes\n\nstale\n" + report.EndMarker + "\n"
+
+	if err := run(runArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if !server.createCalled {
+		t.Fatal("expected the Bot Comment to be created")
+	}
+	if report.HasMarker(server.description) {
+		t.Errorf("description = %q, want the stale region stripped out", server.description)
+	}
+	if !strings.HasPrefix(server.description, "Bumps the vendored packages.\n") {
+		t.Errorf("description = %q, want the author's text preserved", server.description)
+	}
+}
+
+func TestRunWritesNothingWhenTheReportIsUnchanged(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// Two consecutive runs on an unchanged Change Request: the second must
+	// make no write at all, so the bot does not fill the activity feed with
+	// "changed the description" on every pipeline run.
+	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+	server.description = "Bumps the vendored packages.\n"
+
+	args := descriptionArgs(repoDir, server.URL, "123", "45")
+	if err := run(args, io.Discard); err != nil {
+		t.Fatalf("first run() unexpected error: %v", err)
+	}
+	if !server.descriptionUpdated {
+		t.Fatal("expected the first run to write the description")
+	}
+
+	firstDescription := server.description
+	server.descriptionUpdated = false
+
+	if err := run(args, io.Discard); err != nil {
+		t.Fatalf("second run() unexpected error: %v", err)
+	}
+
+	if server.descriptionUpdated {
+		t.Error("expected no write on the second run: the rendered report is identical")
+	}
+	if server.description != firstDescription {
+		t.Errorf("description changed between identical runs:\n first: %q\nsecond: %q", firstDescription, server.description)
+	}
+}
+
+func TestRunFailsOnUnterminatedDescriptionRegion(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// The closing marker was deleted by hand: the bot cannot tell where its
+	// region ends, and refuses to guess rather than risk deleting the text
+	// below it.
+	repoDir := setupOrchestrationRepo(t, testBaseLock, testHeadLock)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+	server.description = "Intro.\n\n" + report.Marker + "\nstale\n\nCloses #12.\n"
+
+	err := run(descriptionArgs(repoDir, server.URL, "123", "45"), io.Discard)
+	if err == nil {
+		t.Fatal("run() error = nil, want a failure on the unterminated region")
+	}
+	if !strings.Contains(err.Error(), "closing") {
+		t.Errorf("run() error = %q, want it to explain the missing closing marker", err.Error())
+	}
+	if server.descriptionUpdated {
+		t.Error("expected the description to be left untouched when the region cannot be delimited")
+	}
+}
+
+func TestRunDescriptionModeStaysSilentWhenThereIsNothingToReport(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+
+	// No dependency change and no region yet: nothing was ever reported, so
+	// the author's description is not touched to say so.
+	repoDir := setupMultiFileOrchestrationRepo(t,
+		map[string]string{"composer.lock": testBaseLock, "README.md": "base"},
+		map[string]string{"composer.lock": testBaseLock, "README.md": "head"},
+	)
+	server := newFakeGitLabServer(t, "123", "45", nil)
+	server.description = "Bumps the vendored packages.\n"
+
+	if err := run(descriptionArgs(repoDir, server.URL, "123", "45"), io.Discard); err != nil {
+		t.Fatalf("run() unexpected error: %v", err)
+	}
+
+	if server.descriptionUpdated {
+		t.Errorf("expected no description write, got %q", server.description)
+	}
+	if server.createCalled {
+		t.Error("expected no Bot Comment either")
 	}
 }

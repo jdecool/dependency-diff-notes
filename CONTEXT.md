@@ -75,7 +75,21 @@ Two cases report a single undifferentiated **Dependencies** group instead of thi
 Yarn's Lockfile (`yarn.lock`, both Classic and Berry) carries no such distinction at all — that information lives only in `package.json`, which the bot does not cross-reference.
 pnpm's Lockfile (`pnpm-lock.yaml`) distinguishes them in lockfileVersion 5.x and 6.0 (a per-package `dev` flag, same as npm), but that flag was dropped entirely in lockfileVersion 9.0 — the distinction there lives only per-workspace-importer, which the bot does not walk — so which grouping a pnpm section uses depends on the lockfileVersion of the Lockfile that was actually read, not on the Ecosystem alone.
 
+**Report Destination**:
+Where the Dependency Report lands on a Change Request: the Bot Comment or the Description Region.
+Exactly one is in effect for a run, as declared by the operator; the two are never used at once, since the same report published twice is content a reader has to reconcile with itself.
+The bot maintains the report at the destination in effect and removes it from the other one, so a Change Request never carries two reports that can drift apart (see `docs/adr/0008-report-destination.md`).
+_Avoid_: report target ("target" already names the branch a Change Request merges into), output mode
+
 **Bot Comment**:
-The single comment the bot maintains on a Change Request, identified by a hidden marker and updated in place on every pipeline run instead of being duplicated.
+One of the two Report Destinations, and the default: the single comment the bot maintains on a Change Request, identified by a hidden marker and updated in place on every pipeline run instead of being duplicated.
 Implemented as a plain GitLab Note (never a resolvable Discussion) or a GitHub issue comment, depending on the Forge.
+The bot authored its entire body and is free to rewrite or delete all of it.
 _Avoid_: Bot Note (superseded now that the bot supports more than one Forge), note, discussion (as a synonym for this concept)
+
+**Description Region**:
+The other Report Destination: a delimited region of a Change Request's description (a GitLab Merge Request description, a GitHub Pull Request body) holding the Dependency Report.
+Unlike a Bot Comment it lives inside a document the bot does not own, since the author writes the rest of it, so the bot only ever reads, writes, or removes what lies strictly between its opening and closing markers.
+It is placed at the end of the description when first inserted, and from then on updated wherever the author has since moved it: the end is where it starts out, not a position reimposed on every run.
+A description carrying an opening marker with no closing one has been hand-edited into a shape the bot cannot delimit, and fails the run rather than being guessed at, since every guess about where the region ends risks deleting text a human wrote.
+_Avoid_: description block, managed region (neither says both that it is delimited and where it lives)
