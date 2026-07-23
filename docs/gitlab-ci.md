@@ -1,8 +1,17 @@
-# GitLab configuration: `DEPENDENCY_DIFF_NOTES_TOKEN`
+# GitLab CI
 
-This guide explains how to configure `DEPENDENCY_DIFF_NOTES_TOKEN`, the GitLab API token the bot uses to read and write merge request notes.
+Run as a job in a consumer project's merge request pipeline, the bot compares each active Ecosystem's Lockfile (`composer.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) between the merge-base of the target branch and the current commit, and creates or updates a single note on the merge request reporting the dependency changes found.
 
-## Why a token is required
+See [`examples/gitlab-ci.yml`](../examples/gitlab-ci.yml) for a copy-pasteable job.
+
+Outside of a merge request pipeline (`--request-iid`/`CI_MERGE_REQUEST_IID` empty), where `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` is also empty, the bot prints a message and exits `0` without doing anything - it's safe to leave the job unrestricted by `rules` if you'd rather not gate it on `$CI_PIPELINE_SOURCE`.
+(Passing a `--target-branch` explicitly in that situation runs a [local comparison](local-comparison.md) instead.)
+
+## Configuring the token
+
+The bot needs a GitLab API token, `DEPENDENCY_DIFF_NOTES_TOKEN`, to read and write merge request notes.
+
+### Why a token is required
 
 When the bot runs in a `merge_request_event` pipeline, GitLab sets `CI_MERGE_REQUEST_IID` and the bot detects that it is running in a merge request context.
 In that context it must authenticate to GitLab to create or update its note, so an API token becomes required.
@@ -16,7 +25,7 @@ load config: resolve config: missing required change request settings: token (or
 GitLab provides most of the bot's other settings automatically through predefined CI/CD variables (`CI_SERVER_URL`, `CI_PROJECT_ID`, `CI_MERGE_REQUEST_IID`, `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`).
 The token is the one setting GitLab does not provide for you, so you must configure it yourself.
 
-## Why `CI_JOB_TOKEN` cannot be used
+### Why `CI_JOB_TOKEN` cannot be used
 
 GitLab injects a built-in `CI_JOB_TOKEN` into every job, but it cannot be used here.
 Its API surface deliberately excludes the Notes API, so it cannot create or update merge request comments.
@@ -24,7 +33,7 @@ Falling back to it would only turn the clear "missing token" startup error into 
 
 An explicit token with the `api` scope is therefore required.
 
-## Choosing a token type
+### Choosing a token type
 
 Any of the following works, as long as it has the `api` scope and a role of `Developer` or higher (writing merge request notes requires at least `Developer`).
 
@@ -34,7 +43,7 @@ Any of the following works, as long as it has the `api` scope and a role of `Dev
 - **Personal Access Token**: a fallback for GitLab tiers or instances where project and group access tokens are not available.
   It is tied to your user account and acts on your behalf.
 
-## Step 1: Create the token
+### Step 1: Create the token
 
 These steps describe a Project Access Token.
 Group and personal tokens follow the same idea from their own settings pages.
@@ -50,7 +59,7 @@ Group and personal tokens follow the same idea from their own settings pages.
 9. Copy the generated token value now.
    GitLab shows it only once.
 
-## Step 2: Add the CI/CD variable
+### Step 2: Add the CI/CD variable
 
 1. In the same project, go to **Settings > CI/CD**.
 2. Expand the **Variables** section and click **Add variable**.
@@ -80,4 +89,4 @@ Recommendation:
 3. Re-running the pipeline updates that same note instead of adding a new one.
 
 For the full job definition, see [`examples/gitlab-ci.yml`](../examples/gitlab-ci.yml).
-For the complete configuration surface (all flags and environment variables), see the [Configuration section of the README](../README.md#configuration).
+For the complete configuration surface (all flags and environment variables), see [Configuration](configuration.md).
